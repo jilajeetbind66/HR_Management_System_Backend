@@ -2,6 +2,24 @@
 
 This directory contains the Laravel API for Pinweb HRMS. See the [Hostinger shared-hosting deployment guide](../docs/HOSTINGER_DEPLOYMENT.md) for production environment and Apache setup.
 
+## Deploying the API to Render with Docker
+
+The backend includes a `Dockerfile` configured for Render's Docker runtime. Create a **Web Service** and select **Docker** as the runtime. If the connected repository contains both `backend` and `frontend` folders, set **Root Directory** to `backend`; if the connected repository is already the backend repository, leave **Root Directory** blank. Use `./Dockerfile` and set the health check path to `/up`.
+
+Add these environment variables in Render's environment settings; do not commit secrets:
+
+- `APP_ENV=production`
+- `APP_DEBUG=false`
+- `APP_KEY` — generate a key with `php artisan key:generate --show` in the backend directory and add its output.
+- `APP_URL` — the public URL of the Render API service.
+- `FRONTEND_URL` — the deployed frontend's public URL.
+- `LOG_CHANNEL=stderr` and `LOG_LEVEL=info`
+- `DB_CONNECTION`, `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, and `DB_PASSWORD` for the production database.
+- `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`.
+- The `MAIL_*` variables required for account email verification.
+
+The container listens on Render's `PORT` (default `10000`) and serves Laravel's `public` directory. It caches configuration on startup but does not run database migrations automatically. Back up the production database, then run `php artisan migrate --force` once from the Render Shell after deployment. The database, cache, and session tables are managed by the application's migrations. Do not use SQLite or the container filesystem for production persistence.
+
 <p align="center">
 <a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>

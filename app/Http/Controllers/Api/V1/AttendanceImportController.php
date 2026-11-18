@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Support\AuditLog;
+use App\Support\AttendanceStatus;
 use Carbon\Carbon;
 use Cloudinary\Api\Upload\UploadApi;
 use Cloudinary\Exception\ApiError;
@@ -181,7 +182,9 @@ class AttendanceImportController extends Controller
                     'date' => $record['date'],
                     'punch_in' => $record['punch_in'],
                     'punch_out' => $record['punch_out'],
-                    'status' => 'Present',
+                    'status' => $record['punch_out']
+                        ? AttendanceStatus::forWorkHours((float) $record['work_hours'])
+                        : 'Present',
                     'work_hours' => $record['work_hours'],
                     'ip_address' => null,
                     'location' => $record['location'],

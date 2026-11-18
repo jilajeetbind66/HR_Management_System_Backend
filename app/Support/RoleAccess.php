@@ -26,6 +26,7 @@ final class RoleAccess
         $employeeIds = $user->role === 'manager'
             ? DB::table('employees')
                 ->where('reporting_manager_id', $user->employee_id)
+                ->whereNull('deleted_at')
                 ->pluck('id')
                 ->map(fn ($id) => (int) $id)
                 ->all()
@@ -45,6 +46,7 @@ final class RoleAccess
             && DB::table('employees')
                 ->where('id', $employeeId)
                 ->where('reporting_manager_id', $user->employee_id)
+                ->whereNull('deleted_at')
                 ->exists();
     }
 
@@ -60,5 +62,18 @@ final class RoleAccess
         }
 
         return (int) $assignment->employee_id === (int) $user->employee_id;
+    }
+
+    public static function canUpdateAssignment(User $user, object $assignment): bool
+    {
+        return $user->role === 'super_admin'
+            || ($user->employee_id !== null
+                && (int) $assignment->employee_id === (int) $user->employee_id);
+    }
+
+    public static function canReviewAssignment(User $user, object $assignment): bool
+    {
+        return self::isHr($user->role)
+            || self::managesEmployee($user, (int) $assignment->employee_id);
     }
 }

@@ -8,13 +8,18 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\DocumentsController;
 use App\Http\Controllers\Api\V1\EmailChangeController;
 use App\Http\Controllers\Api\V1\EmployeeController;
+use App\Http\Controllers\Api\V1\EmployeeImportController;
 use App\Http\Controllers\Api\V1\EmployeeLifecycleController;
+use App\Http\Controllers\Api\V1\EmployeeStaffingRequestController;
 use App\Http\Controllers\Api\V1\ExpenseController;
 use App\Http\Controllers\Api\V1\HelpdeskController;
 use App\Http\Controllers\Api\V1\LeaveController;
+use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\OperationalRecordController;
 use App\Http\Controllers\Api\V1\OrganizationController;
 use App\Http\Controllers\Api\V1\PayrollController;
+use App\Http\Controllers\Api\V1\PayrollComponentController;
+use App\Http\Controllers\Api\V1\PayrollStatutoryController;
 use App\Http\Controllers\Api\V1\PerformanceController;
 use App\Http\Controllers\Api\V1\PlatformController;
 use App\Http\Controllers\Api\V1\ProjectController;
@@ -45,12 +50,17 @@ Route::prefix('v1')->group(function () {
     });
 
     Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
+    Route::post('/auth/complete-account-setup', [AuthController::class, 'completeAccountSetup'])
+        ->middleware('throttle:10,1');
     Route::post('/auth/email-change-confirm', [EmailChangeController::class, 'confirm'])
         ->middleware('throttle:10,1');
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/auth/me', [AuthController::class, 'current']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
         Route::post('/auth/change-password', [AuthController::class, 'changePassword']);
+        Route::get('/notifications', [NotificationController::class, 'index']);
+        Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead'])
+            ->whereNumber('id');
 
         Route::post('/auth/email-change-request', [EmailChangeController::class, 'requestOwnEmailChange'])
             ->middleware('throttle:5,1');
@@ -75,6 +85,29 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:super_admin,hr_admin,hr_executive,manager,auditor');
         Route::post('/employees', [EmployeeController::class, 'store'])
             ->middleware('role:super_admin,hr_admin');
+        Route::post('/employees/import/preview', [EmployeeImportController::class, 'preview'])
+            ->middleware('role:super_admin,hr_admin');
+        Route::post('/employees/import', [EmployeeImportController::class, 'import'])
+            ->middleware('role:super_admin,hr_admin');
+        Route::get('/employees/{employeeId}/archive-impact', [EmployeeController::class, 'archiveImpact'])
+            ->whereNumber('employeeId')
+            ->middleware('role:super_admin,hr_admin');
+        Route::delete('/employees/{employeeId}', [EmployeeController::class, 'destroy'])
+            ->whereNumber('employeeId')
+            ->middleware('role:super_admin,hr_admin');
+        Route::patch('/employees/{employeeId}/hierarchy', [EmployeeController::class, 'updateHierarchy'])
+            ->whereNumber('employeeId')
+            ->middleware('role:super_admin,hr_admin');
+        Route::patch('/employees/{employeeId}/compensation', [EmployeeController::class, 'updateCompensation'])
+            ->whereNumber('employeeId')
+            ->middleware('role:super_admin,hr_admin');
+        Route::get('/employee-staffing-requests', [EmployeeStaffingRequestController::class, 'index'])
+            ->middleware('role:manager,super_admin,hr_admin,hr_executive');
+        Route::post('/employee-staffing-requests', [EmployeeStaffingRequestController::class, 'store'])
+            ->middleware('role:manager');
+        Route::patch('/employee-staffing-requests/{requestId}/review', [EmployeeStaffingRequestController::class, 'review'])
+            ->whereNumber('requestId')
+            ->middleware('role:super_admin,hr_admin,hr_executive');
 
         // M10 Employee Lifecycle & Clearances
         Route::get('/lifecycle/cases', [EmployeeLifecycleController::class, 'index'])
@@ -88,6 +121,15 @@ Route::prefix('v1')->group(function () {
         Route::get('/training', [TrainingController::class, 'index'])
             ->middleware('role:employee,manager,hr_admin,hr_executive,super_admin');
         Route::post('/training/courses', [TrainingController::class, 'storeCourse'])
+            ->middleware('role:super_admin,hr_admin');
+        Route::patch('/training/courses/{id}', [TrainingController::class, 'updateCourse'])
+            ->whereNumber('id')
+            ->middleware('role:super_admin,hr_admin');
+        Route::delete('/training/courses/{id}', [TrainingController::class, 'deleteCourse'])
+            ->whereNumber('id')
+            ->middleware('role:super_admin,hr_admin');
+        Route::post('/training/courses/{id}/enrollments', [TrainingController::class, 'assignEmployees'])
+            ->whereNumber('id')
             ->middleware('role:super_admin,hr_admin');
         Route::patch('/training/enrollments/{id}/progress', [TrainingController::class, 'updateProgress'])
             ->middleware('role:employee,manager');
@@ -156,9 +198,9 @@ Route::prefix('v1')->group(function () {
         Route::post('/attendance/imports/{uploadId}/process', [AttendanceImportController::class, 'process'])
             ->middleware('role:super_admin,hr_admin');
         Route::get('/attendance', [AttendanceController::class, 'index'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::post('/attendance/punch', [AttendanceController::class, 'punch'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::get('/attendance/regularizations', [AttendanceController::class, 'regularizations'])
             ->middleware('role:employee,manager,hr_admin,hr_executive,super_admin');
         Route::post('/attendance/regularizations', [AttendanceController::class, 'requestRegularization'])
@@ -168,19 +210,48 @@ Route::prefix('v1')->group(function () {
 
         // M06 Leaves
         Route::get('/leaves', [LeaveController::class, 'index'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::get('/leaves/balances', [LeaveController::class, 'balances'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::post('/leaves/apply', [LeaveController::class, 'apply'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::post('/leaves/{id}/review', [LeaveController::class, 'review'])
             ->middleware('role:manager,hr_admin,hr_executive,super_admin');
+        Route::post('/leaves/{id}/cancel', [LeaveController::class, 'cancel'])
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
 
         // M07 Payroll (India Statutory)
         Route::get('/payroll/payslips/mine', [PayrollController::class, 'mine']);
         Route::get('/payroll/runs', [PayrollController::class, 'index'])
             ->middleware('role:super_admin,payroll_admin,auditor');
+        Route::get('/payroll/components', [PayrollComponentController::class, 'index'])
+            ->middleware('role:super_admin,hr_admin,payroll_admin');
+        Route::post('/payroll/components', [PayrollComponentController::class, 'store'])
+            ->middleware('role:super_admin,hr_admin');
+        Route::patch('/payroll/components/{id}', [PayrollComponentController::class, 'update'])
+            ->whereNumber('id')
+            ->middleware('role:super_admin,hr_admin');
+        Route::get('/payroll/statutory-config', [PayrollStatutoryController::class, 'index'])
+            ->middleware('role:super_admin,hr_admin,payroll_admin');
+        Route::post('/payroll/statutory-config/contributions', [PayrollStatutoryController::class, 'storeContributionConfig'])
+            ->middleware('role:super_admin,hr_admin');
+        Route::post('/payroll/statutory-config/professional-tax', [PayrollStatutoryController::class, 'storeProfessionalTaxRules'])
+            ->middleware('role:super_admin,hr_admin');
+        Route::post('/payroll/statutory-config/income-tax', [PayrollStatutoryController::class, 'storeIncomeTaxRules'])
+            ->middleware('role:super_admin,hr_admin');
+        Route::patch('/payroll/statutory-config/branches/{branchId}/professional-tax', [PayrollStatutoryController::class, 'updateBranchProfessionalTax'])
+            ->whereNumber('branchId')
+            ->middleware('role:super_admin,hr_admin');
+        Route::get('/payroll/tax-declarations', [PayrollStatutoryController::class, 'declarations'])
+            ->middleware('role:super_admin,hr_admin,payroll_admin');
+        Route::put('/payroll/tax-declarations/{employeeId}', [PayrollStatutoryController::class, 'updateDeclaration'])
+            ->whereNumber('employeeId')
+            ->middleware('role:super_admin,hr_admin');
         Route::post('/payroll/runs', [PayrollController::class, 'generate'])
+            ->middleware('role:super_admin,payroll_admin');
+        Route::post('/payroll/runs/{id}/verify', [PayrollController::class, 'verify'])
+            ->middleware('role:super_admin,payroll_admin');
+        Route::post('/payroll/runs/{id}/publish', [PayrollController::class, 'publish'])
             ->middleware('role:super_admin,payroll_admin');
         Route::post('/payroll/runs/{id}/lock', [PayrollController::class, 'lock'])
             ->middleware('role:super_admin,payroll_admin');
@@ -233,24 +304,26 @@ Route::prefix('v1')->group(function () {
         });
 
         // M17 Projects & Deadlines (Architecture Section 9 Baseline)
+        Route::get('/projects/mine', [ProjectController::class, 'mine'])
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::get('/projects', [ProjectController::class, 'index'])
-            ->middleware('role:employee,manager,super_admin');
+            ->middleware('role:manager,hr_admin,hr_executive,super_admin');
         Route::get('/project-penalty-policy', [ProjectController::class, 'penaltyPolicy'])
-            ->middleware('role:employee,manager,super_admin');
+            ->middleware('role:manager,hr_admin,hr_executive,super_admin');
         Route::post('/projects', [ProjectController::class, 'store'])
-            ->middleware('role:manager,super_admin');
+            ->middleware('role:manager,hr_admin,hr_executive,super_admin');
         Route::post('/project-assignments/{id}/progress', [ProjectController::class, 'updateProgress'])
-            ->middleware('role:employee,manager,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::post('/project-assignments/{id}/extension-requests', [ProjectController::class, 'requestExtension'])
-            ->middleware('role:employee,manager,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::post('/project-extension-requests/{id}/approve', [ProjectController::class, 'approveExtension'])
-            ->middleware('role:manager,super_admin');
+            ->middleware('role:manager,hr_admin,hr_executive,super_admin');
         Route::post('/project-assignments/{id}/submit', [ProjectController::class, 'submitCompletion'])
-            ->middleware('role:employee,manager,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::post('/project-assignments/{id}/accept', [ProjectController::class, 'acceptCompletion'])
-            ->middleware('role:manager,super_admin');
+            ->middleware('role:manager,hr_admin,hr_executive,super_admin');
         Route::post('/project-assignments/{id}/penalties', [ProjectController::class, 'assessPenalty'])
-            ->middleware('role:manager,super_admin');
+            ->middleware('role:hr_admin,hr_executive,super_admin');
         Route::post('/project-penalties/{id}/waive', [ProjectController::class, 'waivePenalty'])
             ->middleware('role:manager,super_admin');
 
@@ -262,10 +335,10 @@ Route::prefix('v1')->group(function () {
 
         // M16 Reports & Analytics
         Route::get('/reports/summary', [ReportsController::class, 'index'])
-            ->middleware('role:super_admin,manager,payroll_admin,auditor');
+            ->middleware('role:super_admin,hr_admin,hr_executive,manager,payroll_admin,auditor');
         Route::get('/reports/exports/{report}', [ReportsController::class, 'export'])
-            ->where('report', 'employee_master|pf_source_register|pt_source_register|tds_source_register')
-            ->middleware('role:super_admin,manager,payroll_admin,auditor');
+            ->where('report', 'employee_master|pf_source_register|pt_source_register|tds_source_register|training_compliance')
+            ->middleware('role:super_admin,hr_admin,hr_executive,manager,payroll_admin,auditor');
 
         // M00 Account credential administration
         Route::prefix('admin')->middleware('role:super_admin')->group(function () {

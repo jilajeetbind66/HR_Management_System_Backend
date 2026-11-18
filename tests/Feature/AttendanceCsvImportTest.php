@@ -31,6 +31,7 @@ class AttendanceCsvImportTest extends TestCase
         $hrAdmin = User::where('role', 'hr_admin')->firstOrFail();
         $firstEmployee = DB::table('employees')->where('employee_code', 'EMP-005')->firstOrFail();
         $secondEmployee = DB::table('employees')->where('employee_code', 'EMP-006')->firstOrFail();
+        $incompleteEmployee = DB::table('employees')->where('employee_code', 'EMP-004')->firstOrFail();
         $date = now()->addDay()->toDateString();
         $uploadId = $this->createCsvUpload($hrAdmin);
         Http::fake(['*' => Http::response(implode("\n", [
@@ -39,15 +40,17 @@ class AttendanceCsvImportTest extends TestCase
             "EMP-005,{$date} 18:30:00,DEV-1,PRG",
             "EMP-005,{$date} 09:00:00,DEV-1,PRG",
             "EMP-006,{$date}T03:30:00Z,DEV-2,KSM",
+            "EMP-006,{$date}T03:31:00Z,DEV-2,KSM",
+            "EMP-004,{$date}T06:00:00Z,DEV-3,PRG",
         ]), 200)]);
         Sanctum::actingAs($hrAdmin);
 
         $this->postJson("/api/v1/attendance/imports/{$uploadId}/preview")
             ->assertOk()
             ->assertJsonPath('data.status', 'previewed')
-            ->assertJsonPath('data.row_count', 4)
-            ->assertJsonPath('data.attendance_day_count', 2)
-            ->assertJsonPath('data.new_record_count', 2)
+            ->assertJsonPath('data.row_count', 6)
+            ->assertJsonPath('data.attendance_day_count', 3)
+            ->assertJsonPath('data.new_record_count', 3)
             ->assertJsonPath('data.duplicate_count', 1)
             ->assertJsonPath('data.error_count', 0)
             ->assertJsonPath('data.can_process', true);
@@ -55,7 +58,7 @@ class AttendanceCsvImportTest extends TestCase
         $processed = $this->postJson("/api/v1/attendance/imports/{$uploadId}/process")
             ->assertOk()
             ->assertJsonPath('data.status', 'processed')
-            ->assertJsonPath('data.imported_count', 2)
+            ->assertJsonPath('data.imported_count', 3)
             ->assertJsonPath('data.existing_count', 0)
             ->json('data');
 
@@ -68,23 +71,32 @@ class AttendanceCsvImportTest extends TestCase
             'punch_out' => '06:30 PM',
             'work_hours' => 9.5,
             'location' => 'Biometric: PRG / Device DEV-1',
+            'status' => 'Present',
         ]);
         $this->assertDatabaseHas('attendance_records', [
             'employee_id' => $secondEmployee->id,
             'date' => $date,
             'punch_in' => '09:00 AM',
+            'punch_out' => '09:01 AM',
+            'work_hours' => 0.02,
+            'status' => 'Short Hours',
+        ]);
+        $this->assertDatabaseHas('attendance_records', [
+            'employee_id' => $incompleteEmployee->id,
+            'date' => $date,
             'punch_out' => null,
             'work_hours' => 0,
+            'status' => 'Present',
         ]);
 
         $this->postJson("/api/v1/attendance/imports/{$uploadId}/process")
             ->assertOk()
-            ->assertJsonPath('data.imported_count', 2);
-        $this->assertSame(2, DB::table('attendance_records')->where('date', $date)->count());
+            ->assertJsonPath('data.imported_count', 3);
+        $this->assertSame(3, DB::table('attendance_records')->where('date', $date)->count());
         $this->getJson('/api/v1/attendance/imports')
             ->assertOk()
             ->assertJsonPath('data.0.import_status', 'processed')
-            ->assertJsonPath('data.0.summary.imported_count', 2);
+            ->assertJsonPath('data.0.summary.imported_count', 3);
         $this->assertDatabaseHas('audit_logs', [
             'action' => 'ATTENDANCE_CSV_PROCESSED',
             'module' => 'Attendance',

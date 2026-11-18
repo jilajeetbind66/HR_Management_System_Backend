@@ -3,9 +3,12 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Models\ProjectAssignment;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use App\Support\RoleAccess;
 use App\Support\AuditLog;
 
@@ -18,6 +21,29 @@ class ProjectController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
+        if ($user->role === 'manager') {
+            return $this->projectList($request, 'manager');
+        }
+
+        abort_unless(RoleAccess::isHr($user->role), 403);
+
+        return $this->projectList($request, 'all');
+    }
+
+    /**
+     * GET /api/v1/projects/mine
+     * List only the authenticated employee's project assignments.
+     */
+    public function mine(Request $request): JsonResponse
+    {
+        abort_unless($request->user()->employee_id, 403);
+
+        return $this->projectList($request, 'mine');
+    }
+
+    private function projectList(Request $request, string $scope): JsonResponse
+    {
+        $user = $request->user();
         $query = DB::table('projects')
             ->leftJoin('project_assignments', 'projects.id', '=', 'project_assignments.project_id')
             ->leftJoin('employees', 'project_assignments.employee_id', '=', 'employees.id')
@@ -26,28 +52,38 @@ class ProjectController extends Controller
                 'project_assignments.status as assignment_status',
                 'project_assignments.id as assignment_id',
                 'project_assignments.start_date',
+                'project_assignments.assigned_by',
+                'project_assignments.assigned_by_role',
                 'project_assignments.due_date as planned_end_date',
                 'project_assignments.active_due_date',
                 'project_assignments.progress_percent',
                 'project_assignments.actual_completed_at',
+                'project_assignments.review_note',
+                'project_assignments.accepted_by',
+                'project_assignments.returned_by',
                 'project_assignments.version',
                 'project_assignments.submission_note',
                 'project_assignments.deliverable_link',
                 'employees.id as assigned_employee_id',
+                'employees.reporting_manager_id as assigned_employee_reporting_manager_id',
                 'employees.employee_code as assigned_employee_code',
                 DB::raw("CONCAT(employees.first_name, ' ', employees.last_name) as assigned_employee_name"),
                 'employees.avatar as assigned_employee_avatar'
             );
 
-        if ($user->role === 'manager') {
-            $query->whereIn('project_assignments.employee_id', RoleAccess::visibleEmployeeIds($user));
-        } elseif ($user->role !== 'super_admin') {
-            $query->where('project_assignments.employee_id', $user->employee_id ?? 0);
+        if ($scope === 'mine') {
+            $query->where('project_assignments.employee_id', $user->employee_id);
+        } elseif ($scope === 'manager') {
+            $query->where(function ($managerProjects) use ($user) {
+                $managerProjects
+                    ->whereIn('project_assignments.employee_id', RoleAccess::visibleEmployeeIds($user, false))
+                    ->orWhere('project_assignments.assigned_by', $user->name);
+            });
         }
 
         if ($request->filled('status')) {
             if ($request->query('status') === 'overdue') {
-                $query->where('project_assignments.status', 'in_progress')
+                $query->where('project_assignments.status', '<>', 'completed')
                     ->where('project_assignments.active_due_date', '<', now()->toDateString());
             } elseif ($request->query('status') === 'in_progress') {
                 $query->where('project_assignments.status', 'in_progress')
@@ -65,10 +101,15 @@ class ProjectController extends Controller
             $p->project_status = $p->status;
             $p->status = $p->assignment_status ?? $p->status;
             $overdueDays = 0;
-            if ($p->status === 'in_progress' && $p->active_due_date && $today > $p->active_due_date) {
+            $p->is_overdue = $p->status !== 'completed'
+                && $p->active_due_date
+                && $today > $p->active_due_date;
+            if ($p->is_overdue) {
                 $diff = (strtotime($today) - strtotime($p->active_due_date)) / 86400;
                 $overdueDays = max(0, (int)$diff);
-                $p->status = 'overdue';
+                if ($p->status === 'in_progress') {
+                    $p->status = 'overdue';
+                }
             }
             $p->overdue_days = $overdueDays;
             return $p;
@@ -117,7 +158,13 @@ class ProjectController extends Controller
             'description' => 'nullable|string',
             'deliverable' => 'nullable|string',
             'priority' => 'nullable|in:Low,Medium,High,Urgent',
-            'assigned_employee_id' => 'required|exists:employees,id',
+            'project_type' => 'nullable|in:Feature,Bug Fix,Integration,Report,Migration,Support',
+            'assigned_employee_id' => [
+                'required',
+                'integer',
+                Rule::exists('employees', 'id')
+                    ->where(fn ($query) => $query->where('status', 'active')->whereNull('deleted_at')),
+            ],
             'start_date' => 'required|date',
             'planned_end_date' => 'required|date|after_or_equal:start_date',
         ]);
@@ -139,25 +186,26 @@ class ProjectController extends Controller
                 'description' => $validated['description'] ?? 'No description provided',
                 'deliverable' => $validated['deliverable'] ?? 'Project Milestone Deliverable',
                 'priority' => $validated['priority'] ?? 'Medium',
+                'project_type' => $validated['project_type'] ?? null,
                 'status' => 'in_progress',
                 'created_by' => $request->user()->name,
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
 
-            $assignmentId = DB::table('project_assignments')->insertGetId([
-                'project_id' => $projectId,
-                'employee_id' => $validated['assigned_employee_id'],
-                'assigned_by' => $request->user()->name,
-                'start_date' => $validated['start_date'],
-                'due_date' => $validated['planned_end_date'], // Immutable baseline
-                'active_due_date' => $validated['planned_end_date'],
-                'progress_percent' => 0,
-                'status' => 'in_progress',
-                'version' => 1,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
+            $assignment = new ProjectAssignment();
+            $assignment->project_id = $projectId;
+            $assignment->employee_id = $validated['assigned_employee_id'];
+            $assignment->assigned_by = $request->user()->name;
+            $assignment->assigned_by_role = $request->user()->role;
+            $assignment->start_date = $validated['start_date'];
+            $assignment->due_date = $validated['planned_end_date'];
+            $assignment->active_due_date = $validated['planned_end_date'];
+            $assignment->progress_percent = 0;
+            $assignment->status = 'in_progress';
+            $assignment->version = 1;
+            $assignment->save();
+            $assignmentId = $assignment->id;
 
             AuditLog::record(
                 $request,
@@ -174,6 +222,8 @@ class ProjectController extends Controller
                     'project_assignments.status as assignment_status',
                     'project_assignments.id as assignment_id',
                     'project_assignments.start_date',
+                    'project_assignments.assigned_by',
+                    'project_assignments.assigned_by_role',
                     'project_assignments.due_date as planned_end_date',
                     'project_assignments.active_due_date',
                     'project_assignments.progress_percent',
@@ -182,6 +232,7 @@ class ProjectController extends Controller
                     'project_assignments.submission_note',
                     'project_assignments.deliverable_link',
                     'employees.id as assigned_employee_id',
+                    'employees.reporting_manager_id as assigned_employee_reporting_manager_id',
                     'employees.employee_code as assigned_employee_code',
                     DB::raw("CONCAT(employees.first_name, ' ', employees.last_name) as assigned_employee_name"),
                     'employees.avatar as assigned_employee_avatar'
@@ -209,7 +260,7 @@ class ProjectController extends Controller
         if (!$assignment) {
             return response()->json(['message' => 'Assignment not found', 'code' => 'NOT_FOUND'], 404);
         }
-        abort_unless(RoleAccess::canManageAssignment($request->user(), $assignment), 403);
+        abort_unless(RoleAccess::canUpdateAssignment($request->user(), $assignment), 403);
 
         // Section 7.6 Concurrency Check
         if ($request->has('version') && $assignment->version !== (int)$request->input('version')) {
@@ -254,20 +305,54 @@ class ProjectController extends Controller
     public function requestExtension(Request $request, int $id): JsonResponse
     {
         $validated = $request->validate([
-            'requested_due_date' => 'required|date',
+            'requested_due_date' => 'required|date_format:Y-m-d',
             'reason' => 'required|string'
         ]);
 
-        $assignment = DB::table('project_assignments')->where('id', $id)->first();
-        if (!$assignment) {
-            return response()->json(['message' => 'Assignment not found'], 404);
-        }
-        abort_unless(RoleAccess::canManageAssignment($request->user(), $assignment), 403);
+        $extId = DB::transaction(function () use ($id, $validated, $request) {
+            $assignment = DB::table('project_assignments')
+                ->where('id', $id)
+                ->lockForUpdate()
+                ->first();
+            if (!$assignment) {
+                abort(404, 'Assignment not found');
+            }
+            abort_unless(RoleAccess::canUpdateAssignment($request->user(), $assignment), 403);
 
-        $extId = DB::transaction(function () use ($assignment, $validated, $request) {
+            if ($validated['requested_due_date'] <= $assignment->active_due_date) {
+                throw ValidationException::withMessages([
+                    'requested_due_date' => 'The requested deadline must be after the current active deadline.',
+                ]);
+            }
+            if (DB::table('project_extension_requests')
+                ->where('assignment_id', $assignment->id)
+                ->where('status', 'pending')
+                ->exists()) {
+                throw ValidationException::withMessages([
+                    'extension_request' => 'A pending extension request already exists for this project.',
+                ]);
+            }
+
+            $assignedDeveloper = DB::table('employees')
+                ->where('id', $assignment->employee_id)
+                ->first(['first_name', 'last_name']);
+            if (!$assignedDeveloper) {
+                abort(404, 'Assigned developer not found');
+            }
+            $requestedBy = trim($assignedDeveloper->first_name . ' ' . $assignedDeveloper->last_name);
+            if ($requestedBy === '') {
+                throw ValidationException::withMessages([
+                    'requested_by' => 'Assigned developer name is unavailable.',
+                ]);
+            }
+            $onBehalfOf = (int) $request->user()->employee_id === (int) $assignment->employee_id
+                ? null
+                : $request->user()->name;
+
             $extensionId = DB::table('project_extension_requests')->insertGetId([
                 'assignment_id' => $assignment->id,
-                'requested_by' => $request->user()->name,
+                'requested_by' => $requestedBy,
+                'on_behalf_of' => $onBehalfOf,
                 'old_due_date' => $assignment->active_due_date,
                 'requested_due_date' => $validated['requested_due_date'],
                 'reason' => $validated['reason'],
@@ -301,41 +386,69 @@ class ProjectController extends Controller
      */
     public function approveExtension(Request $request, int $id): JsonResponse
     {
-        $validated = $request->validate([
-            'decision' => 'sometimes|in:approved,rejected',
-            'decision_note' => 'nullable|string',
-        ]);
-        $decision = $validated['decision'] ?? 'approved';
-        $ext = DB::table('project_extension_requests')->where('id', $id)->first();
-        if (!$ext || $ext->status !== 'pending') {
+        $extension = DB::table('project_extension_requests')->where('id', $id)->first();
+        if (!$extension || $extension->status !== 'pending') {
             return response()->json(['message' => 'Invalid extension request state', 'code' => 'INVALID_STATE'], 409);
         }
-        $assignment = DB::table('project_assignments')->where('id', $ext->assignment_id)->first();
-        abort_unless($assignment && RoleAccess::canManageAssignment($request->user(), $assignment), 403);
+        $assignment = DB::table('project_assignments')->where('id', $extension->assignment_id)->first();
+        abort_unless($assignment && RoleAccess::canReviewAssignment($request->user(), $assignment), 403);
 
-        DB::transaction(function () use ($ext, $validated, $decision, $request) {
-            DB::table('project_extension_requests')->where('id', $ext->id)->update([
+        $validated = $request->validate([
+            'decision' => 'required|in:approved,rejected',
+            'decision_note' => 'nullable|string|max:2000',
+        ]);
+        $decision = $validated['decision'];
+        $decisionNote = trim((string) ($validated['decision_note'] ?? ''));
+        if ($decision === 'rejected' && $decisionNote === '') {
+            throw ValidationException::withMessages([
+                'decision_note' => 'Decision remarks are required when rejecting an extension request.',
+            ]);
+        }
+
+        $reviewed = DB::transaction(function () use ($id, $decision, $decisionNote, $request) {
+            $extension = DB::table('project_extension_requests')
+                ->where('id', $id)
+                ->lockForUpdate()
+                ->first();
+            if (!$extension || $extension->status !== 'pending') {
+                return false;
+            }
+
+            $assignment = ProjectAssignment::query()
+                ->whereKey($extension->assignment_id)
+                ->lockForUpdate()
+                ->first();
+            abort_unless($assignment && RoleAccess::canReviewAssignment($request->user(), $assignment), 403);
+
+            $decidedAt = now();
+            DB::table('project_extension_requests')->where('id', $extension->id)->update([
                 'status' => $decision,
                 'reviewed_by' => $request->user()->name,
-                'reviewed_at' => now(),
-                'decision_note' => $validated['decision_note'] ?? null,
+                'reviewed_at' => $decidedAt,
+                'decided_by' => $request->user()->name,
+                'decided_at' => $decidedAt,
+                'decision_note' => $decisionNote !== '' ? $decisionNote : null,
                 'updated_at' => now()
             ]);
 
             if ($decision === 'approved') {
-                DB::table('project_assignments')->where('id', $ext->assignment_id)->update([
-                    'active_due_date' => $ext->requested_due_date,
-                    'status' => 'in_progress',
-                    'updated_at' => now()
-                ]);
+                $assignment->active_due_date = $extension->requested_due_date;
+                $assignment->status = 'in_progress';
+                $assignment->save();
             }
             AuditLog::record(
                 $request,
                 'PROJECT_EXTENSION_REVIEWED',
                 'Projects',
-                "Marked extension request #{$ext->id} {$decision}"
+                "Marked extension request #{$extension->id} {$decision}"
             );
+
+            return true;
         });
+
+        if (!$reviewed) {
+            return response()->json(['message' => 'Invalid extension request state', 'code' => 'INVALID_STATE'], 409);
+        }
 
         return response()->json(['message' => "Extension {$decision}"]);
     }
@@ -351,11 +464,17 @@ class ProjectController extends Controller
             'deliverable_link' => 'nullable|string'
         ]);
 
-        $assignment = DB::table('project_assignments')->where('id', $id)->first();
-        abort_unless($assignment, 404);
-        abort_unless(RoleAccess::canManageAssignment($request->user(), $assignment), 403);
+        $submitted = DB::transaction(function () use ($id, $validated, $request) {
+            $assignment = DB::table('project_assignments')
+                ->where('id', $id)
+                ->lockForUpdate()
+                ->first();
+            abort_unless($assignment, 404);
+            abort_unless(RoleAccess::canUpdateAssignment($request->user(), $assignment), 403);
+            if ($assignment->status !== 'in_progress') {
+                return false;
+            }
 
-        DB::transaction(function () use ($id, $validated, $request) {
             DB::table('project_assignments')->where('id', $id)->update([
                 'status' => 'under_review',
                 'progress_percent' => 100,
@@ -364,7 +483,13 @@ class ProjectController extends Controller
                 'updated_at' => now()
             ]);
             AuditLog::record($request, 'PROJECT_SUBMITTED', 'Projects', "Submitted assignment #{$id} for review");
+
+            return true;
         });
+
+        if (!$submitted) {
+            return response()->json(['message' => 'Only in-progress projects can be submitted for completion.', 'code' => 'INVALID_STATE'], 409);
+        }
 
         return response()->json(['message' => 'Project submitted for HR review']);
     }
@@ -384,11 +509,19 @@ class ProjectController extends Controller
         if (!$assignment) {
             return response()->json(['message' => 'Assignment not found'], 404);
         }
-        abort_unless(RoleAccess::canManageAssignment($request->user(), $assignment), 403);
+        abort_unless(RoleAccess::canReviewAssignment($request->user(), $assignment), 403);
 
-        DB::transaction(function () use ($assignment, $validated, $decision, $request) {
+        $reviewed = DB::transaction(function () use ($assignment, $validated, $decision, $request) {
+            $lockedAssignment = DB::table('project_assignments')
+                ->where('id', $assignment->id)
+                ->lockForUpdate()
+                ->first();
+            if (!$lockedAssignment || $lockedAssignment->status !== 'under_review') {
+                return false;
+            }
+
             if ($decision === 'accept') {
-                DB::table('project_assignments')->where('id', $assignment->id)->update([
+                DB::table('project_assignments')->where('id', $lockedAssignment->id)->update([
                     'status' => 'completed',
                     'actual_completed_at' => now(),
                     'accepted_at' => now(),
@@ -397,12 +530,12 @@ class ProjectController extends Controller
                     'updated_at' => now()
                 ]);
 
-                DB::table('projects')->where('id', $assignment->project_id)->update([
+                DB::table('projects')->where('id', $lockedAssignment->project_id)->update([
                     'status' => 'completed',
                     'updated_at' => now()
                 ]);
             } else {
-                DB::table('project_assignments')->where('id', $assignment->id)->update([
+                DB::table('project_assignments')->where('id', $lockedAssignment->id)->update([
                     'status' => 'in_progress',
                     'progress_percent' => 85,
                     'review_note' => $validated['remarks'] ?? null,
@@ -410,7 +543,7 @@ class ProjectController extends Controller
                     'updated_at' => now()
                 ]);
 
-                DB::table('projects')->where('id', $assignment->project_id)->update([
+                DB::table('projects')->where('id', $lockedAssignment->project_id)->update([
                     'status' => 'in_progress',
                     'updated_at' => now()
                 ]);
@@ -420,9 +553,15 @@ class ProjectController extends Controller
                 $request,
                 'PROJECT_COMPLETION_REVIEWED',
                 'Projects',
-                "Marked assignment #{$assignment->id} completion {$reviewResult}"
+                "Marked assignment #{$lockedAssignment->id} completion {$reviewResult}"
             );
+
+            return true;
         });
+
+        if (!$reviewed) {
+            return response()->json(['message' => 'Only submitted projects can be reviewed.', 'code' => 'INVALID_STATE'], 409);
+        }
 
         return response()->json([
             'message' => $decision === 'accept'
@@ -434,19 +573,34 @@ class ProjectController extends Controller
     public function assessPenalty(Request $request, int $id): JsonResponse
     {
         $validated = $request->validate(['reason' => 'required|string']);
-        $assignment = DB::table('project_assignments')->where('id', $id)->first();
-        abort_unless($assignment, 404);
-        abort_unless(RoleAccess::canManageAssignment($request->user(), $assignment), 403);
 
         $policy = DB::table('project_penalty_policies')
             ->where('is_active', true)
             ->orderByDesc('id')
             ->first();
-        $penaltyId = DB::transaction(function () use ($assignment, $policy, $validated, $request) {
+        $penaltyId = DB::transaction(function () use ($id, $policy, $validated, $request) {
+            $assignment = DB::table('project_assignments')
+                ->where('id', $id)
+                ->lockForUpdate()
+                ->first();
+            abort_unless($assignment, 404);
+            abort_unless(
+                in_array($request->user()->role, ['super_admin', 'hr_admin', 'hr_executive'], true)
+                    && RoleAccess::canReviewAssignment($request->user(), $assignment),
+                403
+            );
+
+            $today = now()->toDateString();
+            if ($assignment->status === 'completed'
+                || !$assignment->active_due_date
+                || $assignment->active_due_date >= $today) {
+                return null;
+            }
+
             $id = DB::table('project_penalties')->insertGetId([
                 'assignment_id' => $assignment->id,
                 'policy_id' => $policy->id ?? null,
-                'overdue_days_at_assessment' => max(0, (int) floor((strtotime(date('Y-m-d')) - strtotime($assignment->active_due_date)) / 86400)),
+                'overdue_days_at_assessment' => max(0, (int) floor((strtotime($today) - strtotime($assignment->active_due_date)) / 86400)),
                 'penalty_type' => 'non_monetary',
                 'amount' => null,
                 'reason' => $validated['reason'],
@@ -460,6 +614,13 @@ class ProjectController extends Controller
 
             return $id;
         });
+
+        if (!$penaltyId) {
+            return response()->json([
+                'message' => 'Only overdue, non-completed projects can receive an HR-reviewed notice.',
+                'code' => 'INVALID_STATE',
+            ], 409);
+        }
 
         return response()->json([
             'data' => DB::table('project_penalties')->where('id', $penaltyId)->first(),

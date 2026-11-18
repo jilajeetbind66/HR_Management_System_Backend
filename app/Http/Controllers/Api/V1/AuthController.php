@@ -4,10 +4,13 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Str;
 use App\Support\AuditLog;
 use Laravel\Sanctum\PersonalAccessToken;
 
@@ -27,8 +30,19 @@ class AuthController extends Controller
         if (!$user) {
             $employee = DB::table('employees')
                 ->where('employee_code', strtoupper($identifier))
+                ->whereNull('deleted_at')
                 ->first(['id']);
             $user = $employee ? User::where('employee_id', $employee->id)->first() : null;
+        }
+
+        if (
+            $user?->employee_id
+            && DB::table('employees')
+                ->where('id', $user->employee_id)
+                ->whereNotNull('deleted_at')
+                ->exists()
+        ) {
+            $user = null;
         }
 
         $roleGroups = [
@@ -55,6 +69,48 @@ class AuthController extends Controller
                 'token' => $token,
                 'user' => $this->userPayload($user),
             ],
+        ]);
+    }
+
+    public function completeAccountSetup(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => ['required', 'email', 'max:255'],
+            'token' => ['required', 'string', 'max:255'],
+            'password' => ['required', 'string', 'min:12', 'max:255', 'confirmed'],
+            'password_confirmation' => ['required', 'string', 'same:password'],
+        ]);
+        $validated['email'] = strtolower(trim($validated['email']));
+
+        $status = Password::broker()->reset(
+            [
+                'email' => $validated['email'],
+                'token' => $validated['token'],
+                'password' => $validated['password'],
+                'password_confirmation' => $validated['password_confirmation'],
+            ],
+            function (User $user, string $password): void {
+                $user->forceFill([
+                    'password' => $password,
+                    'email_verified_at' => now(),
+                    'must_change_password' => false,
+                ]);
+                $user->setRememberToken(Str::random(60));
+                $user->save();
+                $user->tokens()->delete();
+
+                event(new PasswordReset($user));
+            }
+        );
+
+        if ($status !== Password::PASSWORD_RESET) {
+            return response()->json([
+                'message' => 'This password setup link is invalid, expired, or already used. Ask HR to send a new one.',
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => 'Your password is set. You can now sign in to Pinweb HRMS.',
         ]);
     }
 
@@ -114,7 +170,10 @@ class AuthController extends Controller
     private function userPayload(User $user): array
     {
         $employee = $user->employee_id
-            ? DB::table('employees')->where('id', $user->employee_id)->first()
+            ? DB::table('employees')
+                ->where('id', $user->employee_id)
+                ->whereNull('deleted_at')
+                ->first()
             : null;
         $nameParts = explode(' ', trim($user->name), 2);
 

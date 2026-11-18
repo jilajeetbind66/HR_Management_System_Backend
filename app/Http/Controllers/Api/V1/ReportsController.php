@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Support\RoleAccess;
+use App\Support\TrainingReport;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -19,6 +20,8 @@ class ReportsController extends Controller
 
     private const PAYROLL_EXPORT_ROLES = ['super_admin', 'payroll_admin'];
 
+    private const TRAINING_REPORT_ROLES = ['super_admin', 'hr_admin', 'hr_executive', 'manager'];
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -33,7 +36,8 @@ class ReportsController extends Controller
 
         $lockedRuns = $canViewPayroll
             ? DB::table('payroll_runs')
-                ->where('status', 'locked')
+                ->whereIn('status', ['published', 'locked'])
+                ->where('scope_key', '<>', 'demo')
                 ->orderByDesc('period_year')
                 ->orderByDesc('period_month')
                 ->orderByDesc('id')
@@ -67,8 +71,12 @@ class ReportsController extends Controller
                         'latest_locked_run' => $lockedRuns->first(),
                     ]
                     : null,
+                'training' => in_array($role, self::TRAINING_REPORT_ROLES, true)
+                    ? ['branch_compliance' => TrainingReport::branchCompliance($role === 'manager' ? $workforceEmployeeIds : null)]
+                    : null,
                 'exports' => [
                     'employee_master' => in_array($role, ['super_admin', 'manager', 'auditor'], true),
+                    'training_compliance' => in_array($role, self::TRAINING_REPORT_ROLES, true),
                     'pf_source_register' => in_array($role, self::PAYROLL_EXPORT_ROLES, true),
                     'pt_source_register' => in_array($role, self::PAYROLL_EXPORT_ROLES, true),
                     'tds_source_register' => in_array($role, self::PAYROLL_EXPORT_ROLES, true),
@@ -99,6 +107,20 @@ class ReportsController extends Controller
             ]);
         }
 
+        if ($report === 'training_compliance') {
+            abort_unless(in_array($user->role, self::TRAINING_REPORT_ROLES, true), 403);
+            $employeeIds = $user->role === 'manager'
+                ? RoleAccess::visibleEmployeeIds($user, false)
+                : null;
+
+            return response()->json([
+                'data' => [
+                    'report' => $report,
+                    'rows' => TrainingReport::branchCompliance($employeeIds),
+                ],
+            ]);
+        }
+
         abort_unless(in_array($report, [
             'pf_source_register',
             'pt_source_register',
@@ -111,7 +133,8 @@ class ReportsController extends Controller
         ]);
         $run = DB::table('payroll_runs')
             ->where('id', $validated['run_id'])
-            ->where('status', 'locked')
+            ->whereIn('status', ['published', 'locked'])
+            ->where('scope_key', '<>', 'demo')
             ->first([
                 'id',
                 'period_year',
@@ -198,6 +221,7 @@ class ReportsController extends Controller
     {
         $employees = DB::table('employees')
             ->when($employeeIds !== null, fn ($query) => $query->whereIn('id', $employeeIds))
+            ->where('is_demo', false)
             ->get(['status', 'date_of_joining']);
         $activeEmployees = $employees->where('status', 'active')->values();
         $today = Carbon::today()->toDateString();
@@ -210,6 +234,7 @@ class ReportsController extends Controller
             ->join('employees', 'employees.branch_id', '=', 'branches.id')
             ->when($employeeIds !== null, fn ($query) => $query->whereIn('employees.id', $employeeIds))
             ->where('employees.status', 'active')
+            ->where('employees.is_demo', false)
             ->select('branches.id', 'branches.name', 'branches.city')
             ->selectRaw('COUNT(employees.id) as active_employee_count')
             ->groupBy('branches.id', 'branches.name', 'branches.city')
@@ -236,11 +261,13 @@ class ReportsController extends Controller
     private function projectSummary(?array $employeeIds): array
     {
         $assignments = DB::table('project_assignments')
-            ->when($employeeIds !== null, fn ($query) => $query->whereIn('employee_id', $employeeIds))
+            ->join('employees', 'employees.id', '=', 'project_assignments.employee_id')
+            ->where('employees.is_demo', false)
+            ->when($employeeIds !== null, fn ($query) => $query->whereIn('project_assignments.employee_id', $employeeIds))
             ->get([
-                'status',
-                'active_due_date',
-                'actual_completed_at',
+                'project_assignments.status',
+                'project_assignments.active_due_date',
+                'project_assignments.actual_completed_at',
             ]);
         $completed = $assignments->filter(
             fn ($assignment) => $assignment->status === 'completed' || $assignment->actual_completed_at !== null
@@ -278,6 +305,7 @@ class ReportsController extends Controller
         return DB::table('employees')
             ->leftJoin('branches', 'branches.id', '=', 'employees.branch_id')
             ->when($employeeIds !== null, fn ($query) => $query->whereIn('employees.id', $employeeIds))
+            ->where('employees.is_demo', false)
             ->orderBy('employees.employee_code')
             ->get([
                 'employees.employee_code',
@@ -304,9 +332,9 @@ class ReportsController extends Controller
     private function exportDisclaimer(string $report): string
     {
         return match ($report) {
-            'pf_source_register' => 'Internal source data from locked payslips and current employee statutory identifiers. This is not an EPFO ECR filing format or a contribution validation.',
-            'pt_source_register' => 'Internal source data showing the professional-tax amount recorded on the locked payslip and the current employee PT state. State rules are not calculated and this is not a state return form.',
-            default => 'Internal source data showing the TDS amount recorded on the locked payslip and the current employee PAN. This is not Form 24Q and does not include the full tax computation or challan data.',
+            'pf_source_register' => 'Internal source data from published payslips and current employee statutory identifiers. This is not an EPFO ECR filing format or a contribution validation.',
+            'pt_source_register' => 'Internal source data showing the professional-tax amount recorded on the published payslip and the current employee PT state. State rules are not calculated and this is not a state return form.',
+            default => 'Internal source data showing the TDS amount recorded on the published payslip and the current employee PAN. This is not Form 24Q and does not include the full tax computation or challan data.',
         };
     }
 }

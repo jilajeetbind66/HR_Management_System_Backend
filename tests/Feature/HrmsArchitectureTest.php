@@ -269,7 +269,8 @@ class HrmsArchitectureTest extends TestCase
 
         $this->assertDatabaseCount('companies', 1);
         $this->assertDatabaseCount('branches', 2);
-        $this->assertDatabaseCount('departments', 2);
+        $this->assertDatabaseCount('departments', 3);
+        $this->assertDatabaseHas('departments', ['name' => 'Finance & Payroll']);
         $this->assertDatabaseCount('designations', 3);
         $this->assertDatabaseCount('employees', 1);
         $this->assertDatabaseCount('users', 1);
@@ -303,6 +304,19 @@ class HrmsArchitectureTest extends TestCase
                     'id', 'name', 'legal_name', 'pan', 'registered_state', 'currency'
                 ]
             ]);
+    }
+
+    public function test_organization_branches_include_employee_counts(): void
+    {
+        $branch = DB::table('branches')->orderBy('id')->first();
+        $expectedCount = DB::table('employees')->where('branch_id', $branch->id)->count();
+
+        $response = $this->getJson('/api/v1/organization/branches')
+            ->assertOk();
+        $branchData = collect($response->json('data'))->firstWhere('id', $branch->id);
+
+        $this->assertNotNull($branchData);
+        $this->assertSame($expectedCount, (int) $branchData['employees_count']);
     }
 
     /**
@@ -595,13 +609,15 @@ class HrmsArchitectureTest extends TestCase
     public function test_project_updates_and_payroll_lock_are_saved_by_the_server(): void
     {
         $employee = DB::table('employees')->first();
+        $startDate = now()->subDays(10)->toDateString();
+        $pastDueDate = now()->subDay()->toDateString();
         $project = $this->postJson('/api/v1/projects', [
             'name' => 'Remote-backed project',
             'description' => 'Persist each project action.',
             'deliverable' => 'Saved workflow state',
             'assigned_employee_id' => $employee->id,
-            'start_date' => '2026-11-01',
-            'planned_end_date' => '2026-11-30',
+            'start_date' => $startDate,
+            'planned_end_date' => $pastDueDate,
         ])->assertCreated()->json('data');
         $assignmentId = $project['assignment_id'];
 
@@ -611,7 +627,7 @@ class HrmsArchitectureTest extends TestCase
             'version' => 1,
         ])->assertOk();
         $extension = $this->postJson("/api/v1/project-assignments/{$assignmentId}/extension-requests", [
-            'requested_due_date' => '2026-12-15',
+            'requested_due_date' => now()->addDays(15)->toDateString(),
             'reason' => 'Dependency delay',
         ])->assertCreated()->json('data.extension_id');
         $this->postJson("/api/v1/project-extension-requests/{$extension}/approve", [
@@ -649,14 +665,16 @@ class HrmsArchitectureTest extends TestCase
             $this->patchJson("/api/v1/payroll/runs/{$payroll['id']}/payslips/{$payslip->id}/deductions", [
                 'professional_tax' => 0,
                 'tds' => 0,
+                'tds_override_reason' => 'No verified tax table is configured in this isolated test.',
             ])->assertOk();
         }
+        $this->postJson("/api/v1/payroll/runs/{$payroll['id']}/verify")->assertOk();
         $this->postJson("/api/v1/payroll/runs/{$payroll['id']}/lock", [
             'approved_by' => 'Untrusted Client Name',
         ])->assertOk();
         $this->assertDatabaseHas('payroll_runs', [
             'id' => $payroll['id'],
-            'status' => 'locked',
+            'status' => 'published',
             'approved_by' => User::where('role', 'super_admin')->value('name'),
         ]);
     }

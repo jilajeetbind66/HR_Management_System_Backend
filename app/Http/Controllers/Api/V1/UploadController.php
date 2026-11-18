@@ -20,6 +20,9 @@ class UploadController extends Controller
         'expense_receipts',
         'attendance_csv',
         'project_deliverables',
+        'leave_certificates',
+        'training_material',
+        'training_certificates',
     ];
 
     public function index(Request $request): JsonResponse
@@ -58,6 +61,31 @@ class UploadController extends Controller
         if ($module === 'attendance_csv'
             && !in_array($user->role, ['super_admin', 'hr_admin', 'hr_executive'], true)) {
             abort(403);
+        }
+
+        if ($module === 'leave_certificates' && !RoleAccess::isHr($user->role)) {
+            abort_unless($user->employee_id, 403);
+            $query->where('employee_id', $user->employee_id);
+        }
+
+        if ($module === 'training_certificates' && !RoleAccess::isHr($user->role)) {
+            if ($user->role === 'manager') {
+                $query->whereIn('employee_id', RoleAccess::visibleEmployeeIds($user));
+            } else {
+                abort_unless($user->employee_id, 403);
+                $query->where('employee_id', $user->employee_id);
+            }
+        }
+
+        if ($module === 'training_material'
+            && !in_array($user->role, ['super_admin', 'hr_admin', 'hr_executive'], true)) {
+            $employeeIds = $user->role === 'manager'
+                ? RoleAccess::visibleEmployeeIds($user)
+                : [$user->employee_id ?? 0];
+            abort_unless($user->employee_id || $user->role === 'manager', 403);
+            $query->whereIn('record_id', DB::table('training_enrollments')
+                ->select('course_id')
+                ->whereIn('employee_id', $employeeIds));
         }
 
         if ($module === 'project_deliverables') {
@@ -142,11 +170,23 @@ class UploadController extends Controller
             'employee_id' => 'nullable|integer|exists:employees,id',
             'record_id' => 'nullable|integer',
             'document_type' => 'nullable|string|max:100',
-            'file' => 'required|file|max:20480',
+            'file' => 'required|file|max:' . (in_array($request->input('module'), ['leave_certificates', 'training_certificates'], true) ? 10240 : 20480),
         ]);
 
         $module = $validated['module'];
         $this->validateFileType($request, $module);
+        if ($module === 'training_material' && empty($validated['record_id'])) {
+            return response()->json([
+                'message' => 'Course material must be attached to a training course.',
+                'errors' => ['record_id' => ['A training course is required.']],
+            ], 422);
+        }
+        if ($module === 'training_certificates' && empty($validated['record_id'])) {
+            return response()->json([
+                'message' => 'A training certificate must be attached to an enrollment.',
+                'errors' => ['record_id' => ['A training enrollment is required.']],
+            ], 422);
+        }
 
         if ($module === 'employee_documents' && empty($validated['document_type'])) {
             return response()->json([
@@ -155,7 +195,7 @@ class UploadController extends Controller
             ], 422);
         }
 
-        $employeeId = $module === 'attendance_csv'
+        $employeeId = in_array($module, ['attendance_csv', 'training_material'], true)
             ? null
             : (isset($validated['employee_id'])
                 ? (int) $validated['employee_id']
@@ -233,6 +273,18 @@ class UploadController extends Controller
                 'updated_at' => now(),
             ]);
         }
+        if ($module === 'training_material') {
+            DB::table('training_courses')->where('id', $recordId)->update([
+                'material_upload_id' => $uploadId,
+                'updated_at' => now(),
+            ]);
+        }
+        if ($module === 'training_certificates') {
+            DB::table('training_enrollments')->where('id', $recordId)->update([
+                'certificate_upload_id' => $uploadId,
+                'updated_at' => now(),
+            ]);
+        }
 
         return response()->json([
             'data' => [
@@ -305,9 +357,11 @@ class UploadController extends Controller
     {
         $extensions = match ($module) {
             'employee_documents', 'expense_receipts' => 'pdf,jpg,jpeg,png',
+            'leave_certificates', 'training_certificates' => 'pdf,jpg,jpeg,png',
             'employee_photos' => 'jpg,jpeg,png,webp',
             'attendance_csv' => 'csv,txt',
             'project_deliverables' => 'pdf,zip,jpg,jpeg,png,doc,docx,xls,xlsx',
+            'training_material' => 'pdf',
         };
 
         $request->validate([
@@ -325,6 +379,23 @@ class UploadController extends Controller
     {
         $user = $request->user();
         $isHr = $this->isHr($user->role);
+
+        if ($module === 'leave_certificates') {
+            if ($isDownload && $isHr) {
+                return;
+            }
+            abort_unless(
+                $user->employee_id && (int) $user->employee_id === (int) $employeeId,
+                403
+            );
+            if ($recordId) {
+                abort_unless(DB::table('leave_requests')
+                    ->where('id', $recordId)
+                    ->where('employee_id', $employeeId)
+                    ->exists(), 403);
+            }
+            return;
+        }
 
         if (in_array($module, ['employee_documents', 'employee_photos'], true)) {
             if (
@@ -382,6 +453,46 @@ class UploadController extends Controller
             if (!$assignment || !RoleAccess::canManageAssignment($user, $assignment)) {
                 abort(403);
             }
+        }
+
+        if ($module === 'training_material') {
+            abort_unless($recordId && DB::table('training_courses')->where('id', $recordId)->exists(), 404);
+            if (!$isDownload) {
+                abort_unless(in_array($user->role, ['super_admin', 'hr_admin'], true), 403);
+
+                return;
+            }
+            if (in_array($user->role, ['super_admin', 'hr_admin', 'hr_executive'], true)) {
+                return;
+            }
+            $employeeIds = $user->role === 'manager'
+                ? RoleAccess::visibleEmployeeIds($user)
+                : [$user->employee_id ?? 0];
+            abort_unless(DB::table('training_enrollments')
+                ->where('course_id', $recordId)
+                ->whereIn('employee_id', $employeeIds)
+                ->exists(), 403);
+        }
+
+        if ($module === 'training_certificates') {
+            $enrollment = $recordId
+                ? DB::table('training_enrollments')->where('id', $recordId)->first()
+                : null;
+            abort_unless($enrollment && (int) $enrollment->employee_id === (int) $employeeId, 403);
+
+            if ($isDownload && RoleAccess::isHr($user->role)) {
+                return;
+            }
+            if ($isDownload && $user->role === 'manager'
+                && RoleAccess::managesEmployee($user, (int) $enrollment->employee_id)) {
+                return;
+            }
+            abort_unless(
+                $user->employee_id
+                    && (int) $user->employee_id === (int) $enrollment->employee_id
+                    && in_array($user->role, ['employee', 'manager'], true),
+                403
+            );
         }
     }
 

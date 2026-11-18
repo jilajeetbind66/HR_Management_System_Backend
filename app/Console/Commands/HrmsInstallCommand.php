@@ -2,6 +2,10 @@
 
 namespace App\Console\Commands;
 
+use App\Support\DatabaseTarget;
+use App\Support\EmployeeConstants;
+use App\Support\EmployeeOrganization;
+use App\Support\ProbationStatus;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -14,6 +18,12 @@ class HrmsInstallCommand extends Command
 
     public function handle(): int
     {
+        $this->line(DatabaseTarget::description());
+        if (config('app.env') === 'production' && !$this->option('force')) {
+            $this->error('Refusing to run the HRMS installer in production without --force.');
+            return Command::FAILURE;
+        }
+
         $this->info("====================================================================");
         $this->info("    Pinweb HRMS v1.2 Installation & Production Bootstrap (India Baseline)");
         $this->info("====================================================================");
@@ -130,6 +140,14 @@ class HrmsInstallCommand extends Command
                 'updated_at' => now(),
             ]);
 
+            DB::table('departments')->insert([
+                'branch_id' => $prayagrajId,
+                'name' => 'Finance & Payroll',
+                'code' => 'FIN',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
             // 4. Designations
             DB::table('designations')->insert([
                 ['department_id' => $engDeptId, 'title' => 'Director of Engineering', 'level' => 'L7', 'min_experience_years' => 12, 'created_at' => now(), 'updated_at' => now()],
@@ -140,34 +158,42 @@ class HrmsInstallCommand extends Command
             // 5. Seed Comprehensive Employees & Users (10 Staff Baseline)
             $employeesData = [
                 ['code' => 'EMP-001', 'first' => 'Rajesh', 'last' => 'Sharma', 'email' => 'rajesh.sharma@pinweb.in', 'phone' => '+91 98112 34567', 'gender' => 'Male', 'dob' => '1983-05-14', 'desig' => 'Director of Engineering', 'dept' => 'Engineering & Technology', 'branch' => $prayagrajId, 'role' => 'super_admin', 'mgr' => null, 'doj' => '2019-02-01', 'ctc' => 3600000, 'gross' => 300000, 'basic' => 150000, 'pan' => 'AAACS1234F', 'uan' => '100904567890'],
-                ['code' => 'EMP-002', 'first' => 'Priya', 'last' => 'Nair', 'email' => 'priya.nair@pinweb.in', 'phone' => '+91 98201 11223', 'gender' => 'Female', 'dob' => '1988-08-22', 'desig' => 'Head of People Operations', 'dept' => 'People & Culture (HR)', 'branch' => $prayagrajId, 'role' => 'hr_admin', 'mgr' => 1, 'doj' => '2020-06-15', 'ctc' => 2400000, 'gross' => 200000, 'basic' => 100000, 'pan' => 'BPZPN5678K', 'uan' => '100904567891'],
-                ['code' => 'EMP-003', 'first' => 'Ananya', 'last' => 'Deshmukh', 'email' => 'ananya.deshmukh@pinweb.in', 'phone' => '+91 98450 33445', 'gender' => 'Female', 'dob' => '1990-11-03', 'desig' => 'Lead Payroll Specialist', 'dept' => 'Finance & Payroll', 'branch' => $prayagrajId, 'role' => 'payroll_admin', 'mgr' => 1, 'doj' => '2021-01-10', 'ctc' => 1800000, 'gross' => 150000, 'basic' => 75000, 'pan' => 'CKLPD9012M', 'uan' => '100904567892'],
-                ['code' => 'EMP-004', 'first' => 'Vikram', 'last' => 'Malhotra', 'email' => 'vikram.malhotra@pinweb.in', 'phone' => '+91 98710 55667', 'gender' => 'Male', 'dob' => '1986-03-30', 'desig' => 'Engineering Manager', 'dept' => 'Engineering & Technology', 'branch' => $prayagrajId, 'role' => 'manager', 'mgr' => 1, 'doj' => '2020-03-01', 'ctc' => 2800000, 'gross' => 233333, 'basic' => 116666, 'pan' => 'DFGPM3456Q', 'uan' => '100904567893'],
-                ['code' => 'EMP-005', 'first' => 'Aarav', 'last' => 'Patel', 'email' => 'aarav.patel@pinweb.in', 'phone' => '+91 97230 77889', 'gender' => 'Male', 'dob' => '1995-07-19', 'desig' => 'Senior Fullstack Engineer', 'dept' => 'Engineering & Technology', 'branch' => $kaushambiId, 'role' => 'employee', 'mgr' => 4, 'doj' => '2022-04-18', 'ctc' => 1600000, 'gross' => 133333, 'basic' => 66666, 'pan' => 'EMPPA7890R', 'uan' => '100904567894'],
-                ['code' => 'EMP-006', 'first' => 'Sneha', 'last' => 'Reddy', 'email' => 'sneha.reddy@pinweb.in', 'phone' => '+91 94401 99001', 'gender' => 'Female', 'dob' => '1997-01-25', 'desig' => 'Mobile & Cloud Engineer', 'dept' => 'Engineering & Technology', 'branch' => $kaushambiId, 'role' => 'employee', 'mgr' => 4, 'doj' => '2023-07-03', 'ctc' => 1400000, 'gross' => 116666, 'basic' => 58333, 'pan' => 'FGHSR1234T', 'uan' => '100904567895'],
-                ['code' => 'EMP-007', 'first' => 'Rohan', 'last' => 'Verma', 'email' => 'rohan.verma@pinweb.in', 'phone' => '+91 98190 22334', 'gender' => 'Male', 'dob' => '1992-09-12', 'desig' => 'DevOps & Security Engineer', 'dept' => 'Engineering & Technology', 'branch' => $kaushambiId, 'role' => 'employee', 'mgr' => 4, 'doj' => '2021-08-16', 'ctc' => 1500000, 'gross' => 125000, 'basic' => 62500, 'pan' => 'GHKRV5678W', 'uan' => '100904567896'],
-                ['code' => 'EMP-008', 'first' => 'Meera', 'last' => 'Iyer', 'email' => 'meera.iyer@pinweb.in', 'phone' => '+91 98440 66778', 'gender' => 'Female', 'dob' => '1994-04-05', 'desig' => 'Senior Talent Acquisition Partner', 'dept' => 'People & Culture (HR)', 'branch' => $kaushambiId, 'role' => 'recruiter', 'mgr' => 2, 'doj' => '2022-11-01', 'ctc' => 1200000, 'gross' => 100000, 'basic' => 50000, 'pan' => 'HJIMI9012Y', 'uan' => '100904567897'],
-                ['code' => 'EMP-009', 'first' => 'Siddharth', 'last' => 'Mehta', 'email' => 'siddharth.mehta@pinweb.in', 'phone' => '+91 98210 44556', 'gender' => 'Male', 'dob' => '1996-12-18', 'desig' => 'QA Automation Lead', 'dept' => 'Engineering & Technology', 'branch' => $prayagrajId, 'role' => 'employee', 'mgr' => 4, 'doj' => '2024-02-12', 'ctc' => 1100000, 'gross' => 91666, 'basic' => 45833, 'pan' => 'JKLSM3456Z', 'uan' => '100904567898'],
-                ['code' => 'EMP-010', 'first' => 'Neha', 'last' => 'Kapoor', 'email' => 'neha.kapoor@pinweb.in', 'phone' => '+91 98100 88990', 'gender' => 'Female', 'dob' => '1991-06-08', 'desig' => 'Internal Auditor & Compliance Officer', 'dept' => 'People & Culture (HR)', 'branch' => $prayagrajId, 'role' => 'auditor', 'mgr' => 2, 'doj' => '2021-05-20', 'ctc' => 1300000, 'gross' => 108333, 'basic' => 54166, 'pan' => 'KLMNK7890A', 'uan' => '100904567899'],
+                ['code' => 'EMP-002', 'first' => 'Priya', 'last' => 'Nair', 'email' => 'priya.nair@pinweb.in', 'phone' => '+91 98201 11223', 'gender' => 'Female', 'dob' => '1988-08-22', 'desig' => 'Head of People Operations', 'dept' => 'People & Culture (HR)', 'branch' => $prayagrajId, 'role' => 'hr_admin', 'mgr' => 'EMP-001', 'doj' => '2020-06-15', 'ctc' => 2400000, 'gross' => 200000, 'basic' => 100000, 'pan' => 'BPZPN5678K', 'uan' => '100904567891'],
+                ['code' => 'EMP-003', 'first' => 'Ananya', 'last' => 'Deshmukh', 'email' => 'ananya.deshmukh@pinweb.in', 'phone' => '+91 98450 33445', 'gender' => 'Female', 'dob' => '1990-11-03', 'desig' => 'Lead Payroll Specialist', 'dept' => 'Finance & Payroll', 'branch' => $prayagrajId, 'role' => 'payroll_admin', 'mgr' => 'EMP-001', 'doj' => '2021-01-10', 'ctc' => 1800000, 'gross' => 150000, 'basic' => 75000, 'pan' => 'CKLPD9012M', 'uan' => '100904567892'],
+                ['code' => 'EMP-004', 'first' => 'Vikram', 'last' => 'Malhotra', 'email' => 'vikram.malhotra@pinweb.in', 'phone' => '+91 98710 55667', 'gender' => 'Male', 'dob' => '1986-03-30', 'desig' => 'Engineering Manager', 'dept' => 'Engineering & Technology', 'branch' => $prayagrajId, 'role' => 'manager', 'mgr' => 'EMP-001', 'doj' => '2020-03-01', 'ctc' => 2800000, 'gross' => 233333, 'basic' => 116666, 'pan' => 'DFGPM3456Q', 'uan' => '100904567893'],
+                ['code' => 'EMP-005', 'first' => 'Aarav', 'last' => 'Patel', 'email' => 'aarav.patel@pinweb.in', 'phone' => '+91 97230 77889', 'gender' => 'Male', 'dob' => '1995-07-19', 'desig' => 'Senior Fullstack Engineer', 'dept' => 'Engineering & Technology', 'branch' => $kaushambiId, 'role' => 'employee', 'mgr' => null, 'doj' => '2022-04-18', 'ctc' => 1600000, 'gross' => 133333, 'basic' => 66666, 'pan' => 'EMPPA7890R', 'uan' => '100904567894'],
+                ['code' => 'EMP-006', 'first' => 'Sneha', 'last' => 'Reddy', 'email' => 'sneha.reddy@pinweb.in', 'phone' => '+91 94401 99001', 'gender' => 'Female', 'dob' => '1997-01-25', 'desig' => 'Mobile & Cloud Engineer', 'dept' => 'Engineering & Technology', 'branch' => $kaushambiId, 'role' => 'employee', 'mgr' => null, 'doj' => '2023-07-03', 'ctc' => 1400000, 'gross' => 116666, 'basic' => 58333, 'pan' => 'FGHSR1234T', 'uan' => '100904567895'],
+                ['code' => 'EMP-007', 'first' => 'Rohan', 'last' => 'Verma', 'email' => 'rohan.verma@pinweb.in', 'phone' => '+91 98190 22334', 'gender' => 'Male', 'dob' => '1992-09-12', 'desig' => 'DevOps & Security Engineer', 'dept' => 'Engineering & Technology', 'branch' => $kaushambiId, 'role' => 'employee', 'mgr' => null, 'doj' => '2021-08-16', 'ctc' => 1500000, 'gross' => 125000, 'basic' => 62500, 'pan' => 'GHKRV5678W', 'uan' => '100904567896'],
+                ['code' => 'EMP-008', 'first' => 'Meera', 'last' => 'Iyer', 'email' => 'meera.iyer@pinweb.in', 'phone' => '+91 98440 66778', 'gender' => 'Female', 'dob' => '1994-04-05', 'desig' => 'Senior Talent Acquisition Partner', 'dept' => 'People & Culture (HR)', 'branch' => $kaushambiId, 'role' => 'recruiter', 'mgr' => null, 'doj' => '2022-11-01', 'ctc' => 1200000, 'gross' => 100000, 'basic' => 50000, 'pan' => 'HJIMI9012Y', 'uan' => '100904567897'],
+                ['code' => 'EMP-009', 'first' => 'Siddharth', 'last' => 'Mehta', 'email' => 'siddharth.mehta@pinweb.in', 'phone' => '+91 98210 44556', 'gender' => 'Male', 'dob' => '1996-12-18', 'desig' => 'QA Automation Lead', 'dept' => 'Engineering & Technology', 'branch' => $prayagrajId, 'role' => 'employee', 'mgr' => 'EMP-004', 'doj' => '2024-02-12', 'ctc' => 1100000, 'gross' => 91666, 'basic' => 45833, 'pan' => 'JKLSM3456Z', 'uan' => '100904567898'],
+                ['code' => 'EMP-010', 'first' => 'Neha', 'last' => 'Kapoor', 'email' => 'neha.kapoor@pinweb.in', 'phone' => '+91 98100 88990', 'gender' => 'Female', 'dob' => '1991-06-08', 'desig' => 'Internal Auditor & Compliance Officer', 'dept' => 'People & Culture (HR)', 'branch' => $prayagrajId, 'role' => 'auditor', 'mgr' => 'EMP-002', 'doj' => '2021-05-20', 'ctc' => 1300000, 'gross' => 108333, 'basic' => 54166, 'pan' => 'KLMNK7890A', 'uan' => '100904567899'],
             ];
 
             $empIdMap = [];
             foreach ($employeesData as $ed) {
+                $organization = EmployeeOrganization::resolve(
+                    null,
+                    null,
+                    $ed['dept'],
+                    $ed['desig']
+                );
                 $eid = DB::table('employees')->insertGetId([
                     'employee_code' => $ed['code'],
                     'first_name' => $ed['first'],
                     'last_name' => $ed['last'],
                     'email' => $ed['email'],
                     'phone' => $ed['phone'],
-                    'gender' => $ed['gender'],
+                    'gender' => $ed['gender'] ?? EmployeeConstants::GENDER_OTHER,
                     'date_of_birth' => $ed['dob'],
-                    'designation' => $ed['desig'],
-                    'department' => $ed['dept'],
+                    'designation' => $organization['designation'],
+                    'designation_id' => $organization['designation_id'],
+                    'department' => $organization['department'],
+                    'department_id' => $organization['department_id'],
                     'branch_id' => $ed['branch'],
                     'reporting_manager_id' => null,
                     'date_of_joining' => $ed['doj'],
                     'employment_type' => 'Full-Time Permanent',
-                    'probation_status' => 'Confirmed',
+                    'probation_status' => ProbationStatus::fromJoiningDate($ed['doj']),
                     'status' => 'active',
                     'version' => 1,
                     'created_at' => now(),
@@ -216,6 +242,25 @@ class HrmsInstallCommand extends Command
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
+            }
+
+            foreach ($employeesData as $employeeData) {
+                if (!$employeeData['mgr']) {
+                    continue;
+                }
+
+                $managerId = DB::table('employees')
+                    ->where('employee_code', $employeeData['mgr'])
+                    ->value('id');
+                if (!$managerId) {
+                    throw new \RuntimeException(
+                        "Reporting manager [{$employeeData['mgr']}] was not found for [{$employeeData['code']}]."
+                    );
+                }
+
+                DB::table('employees')
+                    ->where('employee_code', $employeeData['code'])
+                    ->update(['reporting_manager_id' => $managerId]);
             }
 
             // 6. Penalty Policy Safeguard Baseline (Section 9 & 10)

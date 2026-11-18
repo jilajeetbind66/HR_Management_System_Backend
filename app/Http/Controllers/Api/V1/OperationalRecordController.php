@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Support\EmployeeConstants;
+use App\Support\EmployeeOrganization;
+use App\Support\ProbationStatus;
 use App\Support\AuditLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -222,19 +225,27 @@ class OperationalRecordController extends Controller
                 $employeeCode = 'EMP-'.str_pad((string) $nextNumber++, 3, '0', STR_PAD_LEFT);
             } while (DB::table('employees')->where('employee_code', $employeeCode)->exists());
 
+                $organization = EmployeeOrganization::resolve(
+                    null,
+                    null,
+                    $job->department,
+                    $job->title
+                );
             $employeeId = DB::table('employees')->insertGetId([
                 'employee_code' => $employeeCode,
                 'first_name' => $candidate->first_name,
                 'last_name' => $candidate->last_name,
                 'email' => $candidate->email,
                 'phone' => $candidate->phone,
-                'gender' => 'Other',
-                'designation' => $job->title,
-                'department' => $job->department,
+                'gender' => EmployeeConstants::GENDER_OTHER,
+                'designation' => $organization['designation'],
+                'designation_id' => $organization['designation_id'],
+                'department' => $organization['department'],
+                'department_id' => $organization['department_id'],
                 'branch_id' => $job->branch_id,
                 'date_of_joining' => now()->toDateString(),
                 'employment_type' => 'Unspecified',
-                'probation_status' => 'Pending',
+                'probation_status' => ProbationStatus::fromJoiningDate(now()->toDateString()),
                 'status' => 'active',
                 'version' => 1,
                 'created_at' => now(),

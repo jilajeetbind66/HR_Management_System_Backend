@@ -31,6 +31,9 @@ class ReportsAnalyticsTest extends TestCase
         $manager = User::where('role', 'manager')->firstOrFail();
         $employee = User::where('role', 'employee')->firstOrFail();
         DB::table('employees')
+            ->where('reporting_manager_id', $manager->employee_id)
+            ->update(['reporting_manager_id' => null]);
+        DB::table('employees')
             ->where('id', $employee->employee_id)
             ->update(['reporting_manager_id' => $manager->employee_id]);
         Sanctum::actingAs($manager);
@@ -54,7 +57,7 @@ class ReportsAnalyticsTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_payroll_admin_can_export_only_locked_payroll_source_data(): void
+    public function test_payroll_admin_can_export_only_published_payroll_source_data(): void
     {
         $payrollAdmin = User::factory()->create([
             'name' => 'Payroll Admin',
@@ -76,7 +79,7 @@ class ReportsAnalyticsTest extends TestCase
             'period_month' => 11,
             'scope_key' => 'company',
             'month_name' => 'November 2026',
-            'status' => 'locked',
+            'status' => 'published',
             'total_employees' => 1,
             'gross_payout_inr' => 50000,
             'total_deductions_inr' => 3700,
@@ -128,7 +131,7 @@ class ReportsAnalyticsTest extends TestCase
             ->assertJsonPath('data.rows.0.tds_recorded', 500);
         $this->getJson('/api/v1/reports/exports/employee_master')->assertForbidden();
 
-        DB::table('payroll_runs')->where('id', $runId)->update(['status' => 'review']);
+        DB::table('payroll_runs')->where('id', $runId)->update(['status' => 'draft']);
         $this->getJson("/api/v1/reports/exports/pf_source_register?run_id={$runId}")
             ->assertNotFound();
     }
@@ -148,6 +151,44 @@ class ReportsAnalyticsTest extends TestCase
         $this->assertFalse($summary->json('data.exports.pf_source_register'));
         $this->getJson('/api/v1/reports/exports/tds_source_register?run_id=1')
             ->assertForbidden();
+    }
+
+    public function test_demo_employees_and_demo_payroll_runs_are_excluded_from_business_reports(): void
+    {
+        $demoEmployee = User::where('role', 'employee')->firstOrFail();
+        DB::table('employees')->where('id', $demoEmployee->employee_id)->update(['is_demo' => true]);
+        $demoRunId = DB::table('payroll_runs')->insertGetId([
+            'period_year' => 2026,
+            'period_month' => 12,
+            'scope_key' => 'demo',
+            'month_name' => 'December 2026 Demo',
+            'status' => 'locked',
+            'total_employees' => 1,
+            'gross_payout_inr' => 65000,
+            'total_deductions_inr' => 0,
+            'net_payout_inr' => 65000,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        Sanctum::actingAs(User::where('role', 'super_admin')->firstOrFail());
+        $summary = $this->getJson('/api/v1/reports/summary')->assertOk();
+        $expectedWorkforceCount = DB::table('employees')->where('is_demo', false)->count();
+        $summary->assertJsonPath('data.workforce.total_employee_count', $expectedWorkforceCount);
+        $this->assertNotContains(
+            $demoRunId,
+            array_column($summary->json('data.payroll.locked_runs'), 'id')
+        );
+
+        $employeeRows = $this->getJson('/api/v1/reports/exports/employee_master')
+            ->assertOk()
+            ->json('data.rows');
+        $this->assertNotContains(
+            DB::table('employees')->where('id', $demoEmployee->employee_id)->value('employee_code'),
+            array_column($employeeRows, 'employee_code')
+        );
+        $this->getJson("/api/v1/reports/exports/pf_source_register?run_id={$demoRunId}")
+            ->assertNotFound();
     }
 
     public function test_project_delivery_rate_uses_completed_assignment_dates(): void

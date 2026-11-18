@@ -20,8 +20,15 @@ class OrganizationController extends Controller
 
     public function branches(): JsonResponse
     {
+        $employeeCounts = DB::table('employees')
+            ->select('branch_id')
+            ->selectRaw('COUNT(*) as employees_count')
+            ->groupBy('branch_id');
+
         $branches = DB::table('branches')
-            ->leftJoin('employees', 'branches.id', '=', 'employees.branch_id')
+            ->leftJoinSub($employeeCounts, 'employee_counts', function ($join) {
+                $join->on('employee_counts.branch_id', '=', 'branches.id');
+            })
             ->select(
                 'branches.id',
                 'branches.company_id',
@@ -34,9 +41,9 @@ class OrganizationController extends Controller
                 'branches.created_at',
                 'branches.updated_at'
             )
-            ->selectRaw('COUNT(employees.id) as employees_count')
-            ->groupBy('branches.id')
+            ->selectRaw('COALESCE(employee_counts.employees_count, 0) as employees_count')
             ->get();
+
         return response()->json(['data' => $branches]);
     }
 

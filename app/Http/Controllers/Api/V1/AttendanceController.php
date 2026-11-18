@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use App\Support\RoleAccess;
 use Illuminate\Support\Carbon;
 use App\Support\AuditLog;
+use App\Support\AttendanceStatus;
 
 class AttendanceController extends Controller
 {
@@ -22,8 +23,10 @@ class AttendanceController extends Controller
             ->select('attendance_records.*', 'employees.first_name', 'employees.last_name', 'employees.employee_code')
             ->orderBy('attendance_records.date', 'desc');
 
-        if (in_array($user->role, ['employee', 'manager'], true)) {
+        if ($user->role === 'manager') {
             $query->whereIn('attendance_records.employee_id', RoleAccess::visibleEmployeeIds($user));
+        } elseif (!RoleAccess::isHr($user->role)) {
+            $query->where('attendance_records.employee_id', $user->employee_id ?? 0);
         }
 
         $attendance = $query->get();
@@ -93,6 +96,7 @@ class AttendanceController extends Controller
                 DB::table('attendance_records')->where('id', $record->id)->update([
                     'punch_out' => $timeNow,
                     'work_hours' => $workHours,
+                    'status' => AttendanceStatus::forWorkHours($workHours),
                     'updated_at' => now(),
                 ]);
                 AuditLog::record($request, 'ATTENDANCE_PUNCHED_OUT', 'Attendance', "Punched out for {$today}");
@@ -120,13 +124,13 @@ class AttendanceController extends Controller
             )
             ->orderByDesc('attendance_regularization_requests.id');
 
-        if ($user->role === 'employee') {
-            $query->where('attendance_regularization_requests.employee_id', $user->employee_id);
-        } elseif ($user->role === 'manager') {
+        if ($user->role === 'manager') {
             $query->whereIn(
                 'attendance_regularization_requests.employee_id',
                 RoleAccess::visibleEmployeeIds($user)
             );
+        } elseif (!RoleAccess::isHr($user->role)) {
+            $query->where('attendance_regularization_requests.employee_id', $user->employee_id ?? 0);
         }
 
         $requests = $query->get()->map(function ($record) {
@@ -226,6 +230,7 @@ class AttendanceController extends Controller
                     'Y-m-d h:i A',
                     $regularization->date . ' ' . $regularization->punch_out_requested
                 );
+                $workHours = round($punchIn->diffInMinutes($punchOut) / 60, 2);
 
                 DB::table('attendance_records')->updateOrInsert(
                     [
@@ -235,8 +240,8 @@ class AttendanceController extends Controller
                     [
                         'punch_in' => $regularization->punch_in_requested,
                         'punch_out' => $regularization->punch_out_requested,
-                        'status' => 'Present',
-                        'work_hours' => round($punchIn->diffInMinutes($punchOut) / 60, 2),
+                        'status' => AttendanceStatus::forWorkHours($workHours),
+                        'work_hours' => $workHours,
                         'location' => 'Regularized',
                         'updated_at' => now(),
                     ]

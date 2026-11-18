@@ -91,7 +91,7 @@ class ReportsController extends Controller
 
         if ($report === 'employee_master') {
             abort_unless(
-                in_array($user->role, ['super_admin', 'manager', 'auditor'], true),
+                in_array($user->role, ['super_admin', 'hr_admin', 'hr_executive', 'manager', 'auditor'], true),
                 403
             );
 

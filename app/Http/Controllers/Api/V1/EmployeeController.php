@@ -812,6 +812,45 @@ class EmployeeController extends Controller
         ]);
     }
 
+    public function updateLeadAccess(Request $request, int $employeeId): JsonResponse
+    {
+        $actor = $request->user();
+        abort_unless(in_array($actor->role, ['super_admin', 'hr_admin', 'hr_executive'], true), 403, 'Unauthorized to manage employee lead access.');
+
+        $validated = $request->validate([
+            'has_lead_access' => 'required|boolean',
+        ]);
+
+        $employee = DB::table('employees')
+            ->where('id', $employeeId)
+            ->whereNull('deleted_at')
+            ->first();
+
+        abort_unless($employee, 404, 'Employee not found.');
+
+        DB::table('employees')
+            ->where('id', $employeeId)
+            ->update([
+                'has_lead_access' => $validated['has_lead_access'] ? 1 : 0,
+                'updated_at' => now(),
+            ]);
+
+        AuditLog::record(
+            $request,
+            'EMPLOYEE_LEAD_ACCESS_UPDATED',
+            'Lead Management',
+            ($validated['has_lead_access'] ? 'Granted' : 'Revoked') . " lead access for employee {$employee->first_name} {$employee->last_name} (#{$employeeId})"
+        );
+
+        return response()->json([
+            'message' => 'Employee lead access updated successfully.',
+            'data' => [
+                'employee_id' => $employeeId,
+                'has_lead_access' => (bool) $validated['has_lead_access'],
+            ],
+        ]);
+    }
+
     private function employeeProfileQuery(): \Illuminate\Database\Query\Builder
     {
         return DB::table('employees')
@@ -861,6 +900,7 @@ class EmployeeController extends Controller
             'employees.employment_type',
             'employees.probation_status',
             'employees.status',
+            'employees.has_lead_access',
             'employees.version',
             'branches.name as branch_name',
             'reporting_managers.first_name as reporting_manager_first_name',
@@ -880,6 +920,7 @@ class EmployeeController extends Controller
             : trim(($employee->reporting_manager_first_name ?? '') . ' ' . ($employee->reporting_manager_last_name ?? ''));
         $employee->allow_cross_branch_managers = (bool) config('hrms.allow_cross_branch_managers');
         $employee->probation_status = ProbationStatus::fromJoiningDate($employee->date_of_joining);
+        $employee->has_lead_access = (bool) ($employee->has_lead_access ?? false);
 
         unset($employee->reporting_manager_first_name, $employee->reporting_manager_last_name);
 

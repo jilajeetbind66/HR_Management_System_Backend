@@ -194,6 +194,7 @@ class AuthController extends Controller
                 ? DB::table('branches')->where('id', $employee->branch_id)->value('name')
                 : null,
             'avatar' => $employee->avatar ?? null,
+            'has_lead_access' => (bool) ($employee->has_lead_access ?? false),
         ];
     }
 }

@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\V1\EmployeeLifecycleController;
 use App\Http\Controllers\Api\V1\EmployeeStaffingRequestController;
 use App\Http\Controllers\Api\V1\ExpenseController;
 use App\Http\Controllers\Api\V1\HelpdeskController;
+use App\Http\Controllers\Api\V1\LeadController;
 use App\Http\Controllers\Api\V1\LeaveController;
 use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\OperationalRecordController;
@@ -101,6 +102,9 @@ Route::prefix('v1')->group(function () {
         Route::patch('/employees/{employeeId}/compensation', [EmployeeController::class, 'updateCompensation'])
             ->whereNumber('employeeId')
             ->middleware('role:super_admin,hr_admin');
+        Route::patch('/employees/{employeeId}/lead-access', [EmployeeController::class, 'updateLeadAccess'])
+            ->whereNumber('employeeId')
+            ->middleware('role:super_admin,hr_admin,hr_executive');
         Route::get('/employee-staffing-requests', [EmployeeStaffingRequestController::class, 'index'])
             ->middleware('role:manager,super_admin,hr_admin,hr_executive');
         Route::post('/employee-staffing-requests', [EmployeeStaffingRequestController::class, 'store'])
@@ -339,6 +343,21 @@ Route::prefix('v1')->group(function () {
         Route::get('/reports/exports/{report}', [ReportsController::class, 'export'])
             ->where('report', 'employee_master|pf_source_register|pt_source_register|tds_source_register|training_compliance')
             ->middleware('role:super_admin,hr_admin,hr_executive,manager,payroll_admin,auditor');
+
+        // M17 Lead Management Module
+        Route::get('/leads', [LeadController::class, 'index']);
+        Route::post('/leads', [LeadController::class, 'store'])
+            ->middleware('role:super_admin,hr_admin,hr_executive');
+        Route::get('/leads/{id}', [LeadController::class, 'show'])
+            ->whereNumber('id');
+        Route::put('/leads/{id}', [LeadController::class, 'update'])
+            ->whereNumber('id')
+            ->middleware('role:super_admin,hr_admin,hr_executive');
+        Route::delete('/leads/{id}', [LeadController::class, 'destroy'])
+            ->whereNumber('id')
+            ->middleware('role:super_admin,hr_admin,hr_executive');
+        Route::patch('/leads/{id}/progress', [LeadController::class, 'updateProgress'])
+            ->whereNumber('id');
 
         // M00 Account credential administration
         Route::prefix('admin')->middleware('role:super_admin')->group(function () {

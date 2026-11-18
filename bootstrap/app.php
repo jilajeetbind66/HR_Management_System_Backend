@@ -28,3 +28,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('hrms:training-notifications')->dailyAt('08:00');
     })
     ->create();
+
+
+
+    

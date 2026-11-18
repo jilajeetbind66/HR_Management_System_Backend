@@ -178,7 +178,7 @@ class TrainingController extends Controller
             'category' => 'sometimes|required|in:Compliance,Security,Role-based,Professional Development,Wellness,Other',
             'description' => 'sometimes|nullable|string|max:5000',
             'mandatory' => 'sometimes|required|boolean',
-            'due_date' => 'sometimes|nullable|date_format:Y-m-d|after_or_equal:today',
+            'due_date' => 'sometimes|nullable|date_format:Y-m-d',
             'material_url' => 'sometimes|nullable|url:http,https|max:2000',
             'status' => 'sometimes|required|in:active,archived',
         ]);
@@ -188,6 +188,16 @@ class TrainingController extends Controller
 
             $mandatory = (bool) ($validated['mandatory'] ?? $course->mandatory);
             $dueDate = array_key_exists('due_date', $validated) ? $validated['due_date'] : $course->due_date;
+            if (
+                array_key_exists('due_date', $validated)
+                && $validated['due_date'] !== null
+                && $validated['due_date'] !== $course->due_date
+                && $validated['due_date'] < Carbon::today()->toDateString()
+            ) {
+                throw ValidationException::withMessages([
+                    'due_date' => 'A newly selected due date must be today or later.',
+                ]);
+            }
             if ($mandatory && !$dueDate) {
                 throw ValidationException::withMessages([
                     'due_date' => 'A due date is required for mandatory training.',

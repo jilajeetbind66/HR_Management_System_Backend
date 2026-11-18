@@ -458,9 +458,17 @@ class AttendanceImportController extends Controller
 
         foreach ($records as &$record) {
             $hasPunchOut = $record['first_timestamp'] !== $record['last_timestamp'];
-            $record['work_hours'] = $hasPunchOut
-                ? round(($record['last_timestamp'] - $record['first_timestamp']) / 3600, 2)
-                : 0;
+            if ($hasPunchOut) {
+                $record['punch_in'] = Carbon::createFromTimestamp($record['first_timestamp'], self::TIMEZONE)->format('h:i A');
+                $record['punch_out'] = Carbon::createFromTimestamp($record['last_timestamp'], self::TIMEZONE)->format('h:i A');
+                $record['work_hours'] = round(($record['last_timestamp'] - $record['first_timestamp']) / 3600, 2);
+                $record['status'] = AttendanceStatus::forWorkHours($record['work_hours']);
+            } else {
+                $record['punch_in'] = Carbon::createFromTimestamp($record['first_timestamp'], self::TIMEZONE)->format('h:i A');
+                $record['punch_out'] = null;
+                $record['work_hours'] = 0;
+                $record['status'] = 'Present';
+            }
             $locationParts = array_filter([
                 $record['location_code'] !== '' ? $record['location_code'] : null,
                 $record['device_id'] !== '' ? "Device {$record['device_id']}" : null,

@@ -36,7 +36,12 @@ class ProjectController extends Controller
      */
     public function mine(Request $request): JsonResponse
     {
-        abort_unless($request->user()->employee_id, 403);
+        if (!$request->user()->employee_id) {
+            return response()->json([
+                'data' => [],
+                'meta' => ['total' => 0, 'version' => '1.2'],
+            ]);
+        }
 
         return $this->projectList($request, 'mine');
     }
@@ -177,8 +182,11 @@ class ProjectController extends Controller
         }
 
         $project = DB::transaction(function () use ($validated, $request) {
-            $count = DB::table('projects')->count();
-            $code = 'PRJ-2026-' . str_pad($count + 1, 3, '0', STR_PAD_LEFT);
+            $year = now()->format('Y');
+            $nextNumber = (int) DB::table('projects')->max('id') + 1;
+            do {
+                $code = 'PRJ-' . $year . '-' . str_pad((string) $nextNumber++, 3, '0', STR_PAD_LEFT);
+            } while (DB::table('projects')->where('project_code', $code)->exists());
 
             $projectId = DB::table('projects')->insertGetId([
                 'project_code' => $code,
@@ -261,6 +269,12 @@ class ProjectController extends Controller
             return response()->json(['message' => 'Assignment not found', 'code' => 'NOT_FOUND'], 404);
         }
         abort_unless(RoleAccess::canUpdateAssignment($request->user(), $assignment), 403);
+        if ($assignment->status !== 'in_progress') {
+            return response()->json([
+                'message' => 'Progress can only be updated while a project is in progress.',
+                'code' => 'INVALID_STATE',
+            ], 409);
+        }
 
         // Section 7.6 Concurrency Check
         if ($request->has('version') && $assignment->version !== (int)$request->input('version')) {
@@ -318,6 +332,15 @@ class ProjectController extends Controller
                 abort(404, 'Assignment not found');
             }
             abort_unless(RoleAccess::canUpdateAssignment($request->user(), $assignment), 403);
+            if ($assignment->status !== 'in_progress') {
+                abort(409, 'Extensions can only be requested while a project is in progress.');
+            }
+        if ($assignment->status !== 'in_progress') {
+            return response()->json([
+                'message' => 'Progress can only be updated while a project is in progress.',
+                'code' => 'INVALID_STATE',
+            ], 409);
+        }
 
             if ($validated['requested_due_date'] <= $assignment->active_due_date) {
                 throw ValidationException::withMessages([
@@ -419,6 +442,9 @@ class ProjectController extends Controller
                 ->lockForUpdate()
                 ->first();
             abort_unless($assignment && RoleAccess::canReviewAssignment($request->user(), $assignment), 403);
+            if ($assignment->status === 'completed') {
+                return false;
+            }
 
             $decidedAt = now();
             DB::table('project_extension_requests')->where('id', $extension->id)->update([
@@ -433,7 +459,9 @@ class ProjectController extends Controller
 
             if ($decision === 'approved') {
                 $assignment->active_due_date = $extension->requested_due_date;
-                $assignment->status = 'in_progress';
+                if ($assignment->status !== 'under_review') {
+                    $assignment->status = 'in_progress';
+                }
                 $assignment->save();
             }
             AuditLog::record(
@@ -471,6 +499,15 @@ class ProjectController extends Controller
                 ->first();
             abort_unless($assignment, 404);
             abort_unless(RoleAccess::canUpdateAssignment($request->user(), $assignment), 403);
+            if ($assignment->status !== 'in_progress') {
+                abort(409, 'Extensions can only be requested while a project is in progress.');
+            }
+        if ($assignment->status !== 'in_progress') {
+            return response()->json([
+                'message' => 'Progress can only be updated while a project is in progress.',
+                'code' => 'INVALID_STATE',
+            ], 409);
+        }
             if ($assignment->status !== 'in_progress') {
                 return false;
             }

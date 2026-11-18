@@ -415,8 +415,9 @@ class UploadController extends Controller
             if ($recordId && !DB::table('expense_claims')
                 ->where('id', $recordId)
                 ->where('employee_id', $employeeId)
+                ->when(!$isDownload, fn ($q) => $q->where('status', 'submitted'))
                 ->exists()) {
-                abort(403);
+                abort(403, $isDownload ? 'Forbidden.' : 'Receipts can only be uploaded to submitted expense claims.');
             }
 
             if (!$isDownload && !$recordId) {

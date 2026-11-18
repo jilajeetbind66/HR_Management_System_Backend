@@ -61,8 +61,22 @@ class AttendanceController extends Controller
                 ->first();
         };
 
-        if (!$record) {
-            $id = DB::transaction(function () use ($validated, $today, $timeNow, $request) {
+        if (!$record || !$record->punch_in) {
+            $id = DB::transaction(function () use ($validated, $today, $timeNow, $request, $record) {
+                if ($record) {
+                    DB::table('attendance_records')->where('id', $record->id)->update([
+                        'punch_in' => $timeNow,
+                        'punch_out' => null,
+                        'status' => 'Present',
+                        'work_hours' => 0,
+                        'ip_address' => $request->ip(),
+                        'location' => $validated['location'] ?? 'Web Portal',
+                        'updated_at' => now(),
+                    ]);
+                    AuditLog::record($request, 'ATTENDANCE_PUNCHED_IN', 'Attendance', "Punched in for {$today}");
+                    return $record->id;
+                }
+
                 $attendanceId = DB::table('attendance_records')->insertGetId([
                     'employee_id' => $validated['employee_id'],
                     'date' => $today,
@@ -90,7 +104,7 @@ class AttendanceController extends Controller
                 "{$record->date} {$record->punch_in}",
                 self::ATTENDANCE_TIMEZONE
             );
-            $workHours = round($punchInAt->diffInMinutes($now) / 60, 2);
+            $workHours = max(0, round($punchInAt->diffInMinutes($now) / 60, 2));
 
             DB::transaction(function () use ($record, $timeNow, $today, $workHours, $request) {
                 DB::table('attendance_records')->where('id', $record->id)->update([
@@ -205,6 +219,11 @@ class AttendanceController extends Controller
         $regularization = DB::table('attendance_regularization_requests')->where('id', $id)->first();
         abort_unless($regularization, 404);
         abort_unless($regularization->status === 'pending', 409);
+        abort_if(
+            $request->user()->employee_id && (int) $request->user()->employee_id === (int) $regularization->employee_id,
+            403,
+            'You cannot review your own regularization request.'
+        );
 
         if ($request->user()->role === 'manager') {
             abort_unless(

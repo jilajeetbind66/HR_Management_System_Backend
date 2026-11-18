@@ -221,6 +221,7 @@ class ReportsController extends Controller
     {
         $employees = DB::table('employees')
             ->when($employeeIds !== null, fn ($query) => $query->whereIn('id', $employeeIds))
+            ->whereNull('deleted_at')
             ->where('is_demo', false)
             ->get(['status', 'date_of_joining']);
         $activeEmployees = $employees->where('status', 'active')->values();
@@ -233,6 +234,7 @@ class ReportsController extends Controller
         $branches = DB::table('branches')
             ->join('employees', 'employees.branch_id', '=', 'branches.id')
             ->when($employeeIds !== null, fn ($query) => $query->whereIn('employees.id', $employeeIds))
+            ->whereNull('employees.deleted_at')
             ->where('employees.status', 'active')
             ->where('employees.is_demo', false)
             ->select('branches.id', 'branches.name', 'branches.city')
@@ -305,6 +307,7 @@ class ReportsController extends Controller
         return DB::table('employees')
             ->leftJoin('branches', 'branches.id', '=', 'employees.branch_id')
             ->when($employeeIds !== null, fn ($query) => $query->whereIn('employees.id', $employeeIds))
+            ->whereNull('employees.deleted_at')
             ->where('employees.is_demo', false)
             ->orderBy('employees.employee_code')
             ->get([

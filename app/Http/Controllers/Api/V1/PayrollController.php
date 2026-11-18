@@ -156,6 +156,21 @@ class PayrollController extends Controller
             return $this->duplicateRunResponse();
         }
 
+        $overlappingEmployees = DB::table('payslips')
+            ->join('payroll_runs', 'payslips.payroll_run_id', '=', 'payroll_runs.id')
+            ->join('employees', 'payslips.employee_id', '=', 'employees.id')
+            ->where('payroll_runs.period_year', $validated['period_year'])
+            ->where('payroll_runs.period_month', $validated['period_month'])
+            ->where('employees.is_demo', $demoScope)
+            ->when($branchId, fn ($q) => $q->where('employees.branch_id', $branchId))
+            ->exists();
+        if ($overlappingEmployees) {
+            return response()->json([
+                'message' => 'One or more employees in this scope already have a payslip generated for this period in another payroll run.',
+                'code' => 'PAYROLL_OVERLAPPING_SCOPE',
+            ], 409);
+        }
+
         $employees = DB::table('employees')
             ->leftJoin('employee_statutory_details', 'employees.id', '=', 'employee_statutory_details.employee_id')
             ->leftJoin('branches', 'branches.id', '=', 'employees.branch_id')
@@ -304,7 +319,7 @@ class PayrollController extends Controller
                             $validated['period_month'],
                             1
                         )->daysInMonth, 2),
-                        max(0, round($gross - $pf - $esi, 2))
+                        max(0, round($gross - $pf - $esi - ($professionalTax ?? 0) - ($tds ?? 0), 2))
                     );
                     $baseDeductions = round($pf + $esi + $lopDeduction + ($professionalTax ?? 0) + ($tds ?? 0), 2);
 
@@ -762,17 +777,50 @@ class PayrollController extends Controller
             }
         }
 
+        $paidLeaveDates = DB::table('leave_requests')
+            ->whereIn('employee_id', $employeeIds)
+            ->where('status', 'approved')
+            ->where('leave_type', '<>', 'Leave Without Pay (LOP)')
+            ->where('from_date', '<=', $periodEnd->toDateString())
+            ->where('to_date', '>=', $periodStart->toDateString())
+            ->get(['employee_id', 'from_date', 'to_date', 'is_half_day', 'counted_dates']);
+
+        $paidDaysByDate = [];
+        foreach ($paidLeaveDates as $leave) {
+            $countedDates = is_string($leave->counted_dates) ? json_decode($leave->counted_dates, true) : $leave->counted_dates;
+            if (!is_array($countedDates) || $countedDates === []) {
+                $countedDates = LeaveDayCalculator::calculate(
+                    (int) $leave->employee_id,
+                    $leave->from_date,
+                    $leave->to_date,
+                    (bool) $leave->is_half_day
+                )['included_dates'];
+            }
+            foreach ($countedDates as $date) {
+                if ($date >= $periodStart->toDateString() && $date <= $periodEnd->toDateString()) {
+                    $paidDaysByDate[$leave->employee_id][$date] = max(
+                        $paidDaysByDate[$leave->employee_id][$date] ?? 0,
+                        $leave->is_half_day ? 0.5 : 1.0
+                    );
+                }
+            }
+        }
+
         $attendance = DB::table('attendance_records')
             ->whereIn('employee_id', $employeeIds)
             ->whereBetween('date', [$periodStart->toDateString(), $periodEnd->toDateString()])
             ->whereIn('status', ['Absent', 'Half Day'])
             ->get(['employee_id', 'date', 'status']);
         foreach ($attendance as $record) {
-            $attendanceLopDays = $record->status === 'Absent' ? 1 : 0.5;
-            $lopDaysByDate[$record->employee_id][$record->date] = max(
-                $lopDaysByDate[$record->employee_id][$record->date] ?? 0,
-                $attendanceLopDays
-            );
+            $attendanceLopDays = $record->status === 'Absent' ? 1.0 : 0.5;
+            $paidCoverage = (float) ($paidDaysByDate[$record->employee_id][$record->date] ?? 0);
+            $netAttendanceLop = max(0.0, $attendanceLopDays - $paidCoverage);
+            if ($netAttendanceLop > 0) {
+                $lopDaysByDate[$record->employee_id][$record->date] = max(
+                    $lopDaysByDate[$record->employee_id][$record->date] ?? 0,
+                    $netAttendanceLop
+                );
+            }
         }
 
         $daysByEmployee = [];

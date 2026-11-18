@@ -42,6 +42,7 @@ class EmployeeController extends Controller
             $columns = array_merge($columns, [
                 'employee_statutory_details.pan',
                 'employee_statutory_details.uan',
+                'employee_statutory_details.pf_account_no',
                 'employee_statutory_details.pt_state',
                 'employee_statutory_details.tax_regime',
                 'employee_statutory_details.pf_applicable',
@@ -451,6 +452,7 @@ class EmployeeController extends Controller
                 $columns = array_merge($this->employeeProfileColumns(), [
                     'employee_statutory_details.pan',
                     'employee_statutory_details.uan',
+                    'employee_statutory_details.pf_account_no',
                     'employee_statutory_details.pt_state',
                     'employee_statutory_details.tax_regime',
                     'employee_statutory_details.pf_applicable',
@@ -551,7 +553,86 @@ class EmployeeController extends Controller
                 ->where('employees.id', $employeeId);
 
             return $this->appendProfileFields($query
-                ->select(array_merge($this->employeeProfileColumns(), $this->compensationColumns()))
+                ->select(array_merge($this->employeeProfileColumns(), [
+                    'employee_statutory_details.pan',
+                    'employee_statutory_details.uan',
+                    'employee_statutory_details.pf_account_no',
+                    'employee_statutory_details.pt_state',
+                    'employee_statutory_details.tax_regime',
+                    'employee_statutory_details.pf_applicable',
+                    'employee_statutory_details.esi_applicable',
+                ], $this->compensationColumns()))
+                ->first());
+        });
+
+        return response()->json(['data' => $savedEmployee]);
+    }
+
+    public function updateStatutory(Request $request, int $employeeId): JsonResponse
+    {
+        abort_unless(in_array($request->user()->role, ['super_admin', 'hr_admin'], true), 403);
+
+        $validated = $request->validate([
+            'pan' => ['nullable', 'string', 'max:10', Rule::regex('/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/i')],
+            'uan' => ['nullable', 'digits:12'],
+            'pf_account_no' => 'nullable|string|max:50',
+            'pf_applicable' => 'required|boolean',
+            'esi_applicable' => 'required|boolean',
+            'pt_state' => 'required|string|max:100',
+            'tax_regime' => ['required', Rule::in(['New', 'Old'])],
+        ]);
+
+        if (isset($validated['pan'])) {
+            $validated['pan'] = strtoupper($validated['pan']);
+        }
+
+        $savedEmployee = DB::transaction(function () use ($request, $employeeId, $validated): ?object {
+            $employee = DB::table('employees')
+                ->where('id', $employeeId)
+                ->whereNull('deleted_at')
+                ->lockForUpdate()
+                ->first(['id', 'employee_code']);
+            abort_unless($employee, 404, 'Employee not found.');
+
+            $details = DB::table('employee_statutory_details')
+                ->where('employee_id', $employeeId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($details) {
+                DB::table('employee_statutory_details')
+                    ->where('employee_id', $employeeId)
+                    ->update([...$validated, 'updated_at' => now()]);
+            } else {
+                DB::table('employee_statutory_details')->insert([
+                    'employee_id' => $employeeId,
+                    ...$validated,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
+            AuditLog::record(
+                $request,
+                'EMPLOYEE_STATUTORY_UPDATED',
+                'Employees',
+                "Updated statutory compliance details for {$employee->employee_code}"
+            );
+
+            $query = $this->employeeProfileQuery()
+                ->leftJoin('employee_statutory_details', 'employees.id', '=', 'employee_statutory_details.employee_id')
+                ->where('employees.id', $employeeId);
+
+            return $this->appendProfileFields($query
+                ->select(array_merge($this->employeeProfileColumns(), [
+                    'employee_statutory_details.pan',
+                    'employee_statutory_details.uan',
+                    'employee_statutory_details.pf_account_no',
+                    'employee_statutory_details.pt_state',
+                    'employee_statutory_details.tax_regime',
+                    'employee_statutory_details.pf_applicable',
+                    'employee_statutory_details.esi_applicable',
+                ], $this->compensationColumns()))
                 ->first());
         });
 
@@ -800,6 +881,10 @@ class EmployeeController extends Controller
                 'direct_reports' => $directReports,
                 'eligible_managers' => $eligibleManagers,
                 'open_projects' => $openProjects,
+                'allocated_assets' => DB::table('company_assets')
+                    ->where('assigned_employee_id', $employeeId)
+                    ->where('status', 'Allocated')
+                    ->get(['id', 'name', 'asset_code']),
                 'pending_leave_requests' => DB::table('leave_requests')
                     ->where('employee_id', $employeeId)
                     ->where('status', 'pending')

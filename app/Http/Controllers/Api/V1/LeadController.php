@@ -407,8 +407,8 @@ class LeadController extends Controller
                 $updates['status'] = $validated['status'];
             }
 
-            if (isset($validated['remarks'])) {
-                $updates['remarks'] = trim($validated['remarks']);
+            if (array_key_exists('remarks', $validated)) {
+                $updates['remarks'] = $validated['remarks'] !== null ? trim($validated['remarks']) : null;
             }
 
             if (!empty($validated['mark_follow_up_completed'])) {
@@ -416,7 +416,12 @@ class LeadController extends Controller
                 $updates['follow_up_date'] = null;
             } elseif (isset($validated['follow_up_required'])) {
                 $updates['follow_up_required'] = (bool) $validated['follow_up_required'];
-                $updates['follow_up_date'] = $updates['follow_up_required'] ? ($validated['follow_up_date'] ?? null) : null;
+                if ($updates['follow_up_required'] && empty($validated['follow_up_date'])) {
+                    throw ValidationException::withMessages([
+                        'follow_up_date' => 'A follow-up date is required when follow-up is enabled.',
+                    ]);
+                }
+                $updates['follow_up_date'] = $updates['follow_up_required'] ? $validated['follow_up_date'] : null;
             }
 
             DB::table('leads')->where('id', $id)->update($updates);

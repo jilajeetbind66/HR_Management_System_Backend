@@ -492,9 +492,24 @@ class LeaveController extends Controller
         }
 
         $managerId = DB::table('employees')->where('id', $employeeId)->value('reporting_manager_id');
-        return $managerId
-            ? ['stage' => 'Manager Approval', 'next_approver_role' => 'manager']
-            : ['stage' => 'No manager assigned', 'next_approver_role' => 'hr'];
+        if ($managerId) {
+            $managerUser = DB::table('users')
+                ->join('employees', 'employees.id', '=', 'users.employee_id')
+                ->where('users.employee_id', $managerId)
+                ->whereNull('employees.deleted_at')
+                ->first(['users.role']);
+            if ($managerUser?->role === 'super_admin') {
+                return ['stage' => 'Super Admin Approval', 'next_approver_role' => 'super_admin'];
+            }
+            if (in_array($managerUser?->role, ['hr_admin', 'hr_executive'], true)) {
+                return ['stage' => 'HR Approval', 'next_approver_role' => 'hr'];
+            }
+            if ($managerUser?->role === 'manager') {
+                return ['stage' => 'Manager Approval', 'next_approver_role' => 'manager'];
+            }
+        }
+
+        return ['stage' => 'No manager assigned', 'next_approver_role' => 'hr'];
     }
 
     private function applicantRole(int $employeeId): string

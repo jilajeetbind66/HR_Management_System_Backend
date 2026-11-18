@@ -139,10 +139,15 @@ class PerformanceController extends Controller
 
             $objectives = DB::table('performance_objectives')
                 ->where('cycle_id', $cycleId)
-                ->get(['status', 'self_rating', 'manager_rating']);
+                ->get(['id', 'status', 'self_rating', 'manager_rating']);
             abort_if($objectives->isEmpty(), 409, 'A cycle needs objectives before it can be closed.');
+
+            $activeObjectives = $objectives->reject(
+                fn ($objective) => in_array($objective->status, ['draft', 'returned'], true)
+            );
+            abort_if($activeObjectives->isEmpty(), 409, 'A cycle needs submitted objectives before it can be closed.');
             abort_if(
-                $objectives->contains(
+                $activeObjectives->contains(
                     fn ($objective) => $objective->status !== 'approved'
                         || $objective->self_rating === null
                         || $objective->manager_rating === null
@@ -150,6 +155,14 @@ class PerformanceController extends Controller
                 409,
                 'Resolve all objective reviews and ratings before closing the cycle.'
             );
+
+            $abandonedIds = $objectives
+                ->filter(fn ($objective) => in_array($objective->status, ['draft', 'returned'], true))
+                ->pluck('id');
+            if ($abandonedIds->isNotEmpty()) {
+                DB::table('performance_key_results')->whereIn('objective_id', $abandonedIds)->delete();
+                DB::table('performance_objectives')->whereIn('id', $abandonedIds)->delete();
+            }
 
             DB::table('performance_cycles')->where('id', $cycleId)->update([
                 'status' => 'closed',
@@ -351,7 +364,7 @@ class PerformanceController extends Controller
         ]);
         $employeeId = $this->activeEmployeeId($request);
 
-        DB::transaction(function () use ($request, $keyResultId, $employeeId, $validated) {
+        $objectiveId = DB::transaction(function () use ($request, $keyResultId, $employeeId, $validated) {
             $keyResult = DB::table('performance_key_results')
                 ->where('id', $keyResultId)
                 ->lockForUpdate()
@@ -378,9 +391,11 @@ class PerformanceController extends Controller
                 'Performance',
                 "Updated key result #{$keyResultId} progress to {$validated['progress_percent']}%"
             );
+
+            return (int) $keyResult->objective_id;
         });
 
-        return response()->json(['data' => $this->loadObjective($keyResult->objective_id)]);
+        return response()->json(['data' => $this->loadObjective($objectiveId)]);
     }
 
     public function submitSelfReview(Request $request, int $objectiveId): JsonResponse

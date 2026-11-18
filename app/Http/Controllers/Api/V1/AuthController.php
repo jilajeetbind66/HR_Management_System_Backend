@@ -39,7 +39,10 @@ class AuthController extends Controller
             $user?->employee_id
             && DB::table('employees')
                 ->where('id', $user->employee_id)
-                ->whereNotNull('deleted_at')
+                ->where(function ($query) {
+                    $query->whereNotNull('deleted_at')
+                        ->orWhereIn('status', ['inactive', 'terminated']);
+                })
                 ->exists()
         ) {
             $user = null;
@@ -81,6 +84,22 @@ class AuthController extends Controller
             'password_confirmation' => ['required', 'string', 'same:password'],
         ]);
         $validated['email'] = strtolower(trim($validated['email']));
+
+        $targetUser = User::where('email', $validated['email'])->first();
+        if (
+            $targetUser?->employee_id
+            && DB::table('employees')
+                ->where('id', $targetUser->employee_id)
+                ->where(function ($query) {
+                    $query->whereNotNull('deleted_at')
+                        ->orWhereIn('status', ['inactive', 'terminated']);
+                })
+                ->exists()
+        ) {
+            return response()->json([
+                'message' => 'This employee account is inactive or archived and cannot complete setup.',
+            ], 403);
+        }
 
         $status = Password::broker()->reset(
             [
@@ -175,7 +194,24 @@ class AuthController extends Controller
                 ->whereNull('deleted_at')
                 ->first()
             : null;
+        $statutory = $employee
+            ? DB::table('employee_statutory_details')
+                ->where('employee_id', $employee->id)
+                ->first(['pan', 'uan', 'tax_regime', 'bank_name'])
+            : null;
         $nameParts = explode(' ', trim($user->name), 2);
+
+        $maskSensitive = static function (?string $value, int $visibleTail = 4): ?string {
+            $trimmed = trim((string) $value);
+            if ($trimmed === '') {
+                return null;
+            }
+            $length = strlen($trimmed);
+            if ($length <= $visibleTail) {
+                return str_repeat('*', $length);
+            }
+            return str_repeat('*', $length - $visibleTail) . substr($trimmed, -$visibleTail);
+        };
 
         return [
             'id' => $user->employee_id ?? $user->id,
@@ -190,11 +226,16 @@ class AuthController extends Controller
             'must_change_password' => (bool) $user->must_change_password,
             'employee_code' => $employee->employee_code ?? null,
             'designation' => $employee->designation ?? null,
+            'branch_id' => $employee->branch_id ?? null,
             'branch_name' => $employee
                 ? DB::table('branches')->where('id', $employee->branch_id)->value('name')
                 : null,
             'avatar' => $employee->avatar ?? null,
             'has_lead_access' => (bool) ($employee->has_lead_access ?? false),
+            'pan' => $maskSensitive($statutory->pan ?? null),
+            'uan' => $maskSensitive($statutory->uan ?? null),
+            'tax_regime' => $statutory->tax_regime ?? null,
+            'bank_name' => $statutory->bank_name ?? null,
         ];
     }
 }

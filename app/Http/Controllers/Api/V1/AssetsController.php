@@ -70,6 +70,7 @@ class AssetsController extends Controller
             $employee = DB::table('employees')
                 ->where('id', $validated['employee_id'])
                 ->where('status', 'active')
+                ->whereNull('deleted_at')
                 ->first();
             abort_unless($employee, 422, 'Select an active employee.');
             $branch = $employee->branch_id

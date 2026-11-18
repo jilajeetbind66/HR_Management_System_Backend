@@ -64,8 +64,12 @@ class UploadController extends Controller
         }
 
         if ($module === 'leave_certificates' && !RoleAccess::isHr($user->role)) {
-            abort_unless($user->employee_id, 403);
-            $query->where('employee_id', $user->employee_id);
+            if ($user->role === 'manager') {
+                $query->whereIn('employee_id', RoleAccess::visibleEmployeeIds($user));
+            } else {
+                abort_unless($user->employee_id, 403);
+                $query->where('employee_id', $user->employee_id);
+            }
         }
 
         if ($module === 'training_certificates' && !RoleAccess::isHr($user->role)) {
@@ -381,7 +385,7 @@ class UploadController extends Controller
         $isHr = $this->isHr($user->role);
 
         if ($module === 'leave_certificates') {
-            if ($isDownload && $isHr) {
+            if ($isDownload && ($isHr || ($user->role === 'manager' && RoleAccess::managesEmployee($user, (int) $employeeId)))) {
                 return;
             }
             abort_unless(

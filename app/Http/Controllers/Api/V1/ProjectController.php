@@ -222,6 +222,18 @@ class ProjectController extends Controller
                 "Created project {$code} and assigned it to employee {$validated['assigned_employee_id']}"
             );
 
+            $assignedUserId = DB::table('users')->where('employee_id', $validated['assigned_employee_id'])->value('id');
+            if ($assignedUserId) {
+                DB::table('user_notifications')->insert([
+                    'user_id' => $assignedUserId,
+                    'event_key' => 'project.assigned',
+                    'title' => "New Project Assigned: {$validated['name']}",
+                    'message' => "You have been assigned project '{$validated['name']}' ({$code}) by {$request->user()->name}. Deadline: {$validated['planned_end_date']}.",
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
             return DB::table('projects')
                 ->leftJoin('project_assignments', 'projects.id', '=', 'project_assignments.project_id')
                 ->leftJoin('employees', 'project_assignments.employee_id', '=', 'employees.id')
@@ -471,6 +483,19 @@ class ProjectController extends Controller
                 "Marked extension request #{$extension->id} {$decision}"
             );
 
+            $developerUserId = DB::table('users')->where('employee_id', $assignment->employee_id)->value('id');
+            if ($developerUserId) {
+                $statusText = $decision === 'approved' ? 'approved' : 'rejected';
+                DB::table('user_notifications')->insert([
+                    'user_id' => $developerUserId,
+                    'event_key' => 'project.extension_reviewed',
+                    'title' => "Deadline Extension " . ucfirst($statusText),
+                    'message' => "Your deadline extension request for project was {$statusText} by {$request->user()->name}." . ($decisionNote !== '' ? " Remarks: {$decisionNote}" : ''),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
             return true;
         });
 
@@ -593,6 +618,19 @@ class ProjectController extends Controller
                 "Marked assignment #{$lockedAssignment->id} completion {$reviewResult}"
             );
 
+            $developerUserId = DB::table('users')->where('employee_id', $lockedAssignment->employee_id)->value('id');
+            if ($developerUserId) {
+                $statusText = $decision === 'accept' ? 'accepted and marked completed' : 'returned for revisions';
+                DB::table('user_notifications')->insert([
+                    'user_id' => $developerUserId,
+                    'event_key' => 'project.completion_reviewed',
+                    'title' => $decision === 'accept' ? 'Project Deliverable Accepted' : 'Project Returned for Revisions',
+                    'message' => "Your project submission was {$statusText} by {$request->user()->name}." . (!empty($validated['remarks']) ? " Remarks: {$validated['remarks']}" : ''),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
             return true;
         });
 
@@ -648,6 +686,18 @@ class ProjectController extends Controller
                 'updated_at' => now(),
             ]);
             AuditLog::record($request, 'PROJECT_PENALTY_ASSESSED', 'Projects', "Assessed penalty #{$id}");
+
+            $developerUserId = DB::table('users')->where('employee_id', $assignment->employee_id)->value('id');
+            if ($developerUserId) {
+                DB::table('user_notifications')->insert([
+                    'user_id' => $developerUserId,
+                    'event_key' => 'project.penalty_assessed',
+                    'title' => 'Overdue Notice Assessed',
+                    'message' => "An overdue notice was assessed for project by {$request->user()->name}. Reason: {$validated['reason']}",
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
 
             return $id;
         });

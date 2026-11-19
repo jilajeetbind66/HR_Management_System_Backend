@@ -44,6 +44,32 @@ class LeadController extends Controller
     }
 
     /**
+     * Get active employees available for lead assignment and filtering.
+     */
+    public function assignees(Request $request): JsonResponse
+    {
+        $this->verifyLeadAccess($request);
+
+        $employees = DB::table('employees')
+            ->whereNull('deleted_at')
+            ->where('status', 'active')
+            ->select([
+                'id',
+                'employee_code',
+                'first_name',
+                'last_name',
+                'designation',
+                'department',
+                'avatar',
+                'has_lead_access',
+            ])
+            ->orderBy('first_name')
+            ->get();
+
+        return response()->json(['data' => $employees]);
+    }
+
+    /**
      * Display a listing of leads with statistics and filters.
      */
     public function index(Request $request): JsonResponse
@@ -59,13 +85,8 @@ class LeadController extends Controller
                 'creator.name as creator_name',
             ]);
 
-        // If employee, strictly restrict to assigned leads
-        if (!$isHr) {
-            $query->join('lead_assignments', function ($join) use ($employeeId) {
-                $join->on('leads.id', '=', 'lead_assignments.lead_id')
-                    ->where('lead_assignments.employee_id', '=', $employeeId);
-            });
-        } elseif ($request->filled('employee_id')) {
+        // Anyone with lead access sees all leads. Apply assignee filter if requested:
+        if ($request->filled('employee_id') && $request->input('employee_id') !== 'all') {
             $filterEmpId = (int) $request->input('employee_id');
             $query->join('lead_assignments', function ($join) use ($filterEmpId) {
                 $join->on('leads.id', '=', 'lead_assignments.lead_id')
@@ -148,15 +169,8 @@ class LeadController extends Controller
             return $lead;
         });
 
-        // Compute dashboard statistics (scoped to role)
-        $statsBaseQuery = DB::table('leads');
-        if (!$isHr) {
-            $statsBaseQuery->join('lead_assignments', function ($join) use ($employeeId) {
-                $join->on('leads.id', '=', 'lead_assignments.lead_id')
-                    ->where('lead_assignments.employee_id', '=', $employeeId);
-            });
-        }
-        $allVisible = $statsBaseQuery->get(['leads.id', 'leads.status', 'leads.follow_up_required', 'leads.follow_up_date']);
+        // Compute dashboard statistics across all leads in the pipeline
+        $allVisible = DB::table('leads')->get(['leads.id', 'leads.status', 'leads.follow_up_required', 'leads.follow_up_date']);
 
         $stats = [
             'total' => $allVisible->count(),
@@ -179,24 +193,24 @@ class LeadController extends Controller
     }
 
     /**
-     * Store a newly created lead in storage (HR only).
+     * Store a newly created lead in storage.
      */
     public function store(Request $request): JsonResponse
     {
-        abort_unless(in_array($request->user()->role, self::HR_ROLES, true), 403, 'Only HR or Super Admin can create leads.');
+        $access = $this->verifyLeadAccess($request);
 
         $validated = $request->validate([
             'lead_name' => 'required|string|max:255',
             'lead_date' => 'required|date',
             'status' => 'required|in:New,In Progress,Converted,Lost',
-            'assigned_employee_ids' => 'required|array|min:1',
-            'assigned_employee_ids.*' => 'required|integer|exists:employees,id',
+            'assigned_employee_ids' => 'sometimes|array',
+            'assigned_employee_ids.*' => 'integer|exists:employees,id',
             'follow_up_required' => 'sometimes|boolean',
             'follow_up_date' => 'required_if:follow_up_required,true,1|nullable|date',
             'remarks' => 'nullable|string|max:5000',
         ]);
 
-        $lead = DB::transaction(function () use ($request, $validated) {
+        $lead = DB::transaction(function () use ($request, $validated, $access) {
             $followUpRequired = (bool) ($validated['follow_up_required'] ?? false);
             $followUpDate = $followUpRequired ? ($validated['follow_up_date'] ?? null) : null;
 
@@ -212,10 +226,15 @@ class LeadController extends Controller
                 'updated_at' => now(),
             ]);
 
+            // Determine assignees (use provided array or default to creator)
+            $assignedIds = !empty($validated['assigned_employee_ids'])
+                ? array_unique($validated['assigned_employee_ids'])
+                : (!empty($access['employeeId']) ? [$access['employeeId']] : []);
+
             // Insert employee assignments
             $assignments = [];
             $now = now();
-            foreach (array_unique($validated['assigned_employee_ids']) as $empId) {
+            foreach ($assignedIds as $empId) {
                 $assignments[] = [
                     'lead_id' => $leadId,
                     'employee_id' => (int) $empId,
@@ -224,7 +243,9 @@ class LeadController extends Controller
                     'updated_at' => $now,
                 ];
             }
-            DB::table('lead_assignments')->insert($assignments);
+            if (!empty($assignments)) {
+                DB::table('lead_assignments')->insert($assignments);
+            }
 
             // Log initial activity note
             DB::table('lead_activities')->insert([
@@ -256,23 +277,18 @@ class LeadController extends Controller
      */
     public function show(Request $request, int $id): JsonResponse
     {
-        $access = $this->verifyLeadAccess($request);
+        $this->verifyLeadAccess($request);
         $lead = $this->loadLeadWithDetails($id);
-
-        if (!$access['isHr']) {
-            $isAssigned = collect($lead->assigned_employees)->contains('id', $access['employeeId']);
-            abort_unless($isAssigned, 403, 'You are not assigned to this lead.');
-        }
 
         return response()->json(['data' => $lead]);
     }
 
     /**
-     * Update the specified lead in storage (HR only).
+     * Update the specified lead in storage.
      */
     public function update(Request $request, int $id): JsonResponse
     {
-        abort_unless(in_array($request->user()->role, self::HR_ROLES, true), 403, 'Only HR or Super Admin can edit leads.');
+        $access = $this->verifyLeadAccess($request);
 
         $lead = DB::table('leads')->where('id', $id)->first();
         abort_unless($lead, 404, 'Lead not found.');
@@ -281,14 +297,14 @@ class LeadController extends Controller
             'lead_name' => 'required|string|max:255',
             'lead_date' => 'required|date',
             'status' => 'required|in:New,In Progress,Converted,Lost',
-            'assigned_employee_ids' => 'required|array|min:1',
-            'assigned_employee_ids.*' => 'required|integer|exists:employees,id',
+            'assigned_employee_ids' => 'sometimes|array',
+            'assigned_employee_ids.*' => 'integer|exists:employees,id',
             'follow_up_required' => 'sometimes|boolean',
             'follow_up_date' => 'required_if:follow_up_required,true,1|nullable|date',
             'remarks' => 'nullable|string|max:5000',
         ]);
 
-        DB::transaction(function () use ($request, $id, $validated, $lead) {
+        DB::transaction(function () use ($request, $id, $validated, $lead, $access) {
             $followUpRequired = (bool) ($validated['follow_up_required'] ?? false);
             $followUpDate = $followUpRequired ? ($validated['follow_up_date'] ?? null) : null;
 
@@ -302,20 +318,28 @@ class LeadController extends Controller
                 'updated_at' => now(),
             ]);
 
-            // Sync assignments
-            DB::table('lead_assignments')->where('lead_id', $id)->delete();
-            $assignments = [];
-            $now = now();
-            foreach (array_unique($validated['assigned_employee_ids']) as $empId) {
-                $assignments[] = [
-                    'lead_id' => $id,
-                    'employee_id' => (int) $empId,
-                    'assigned_by_user_id' => $request->user()->id,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ];
+            // Sync assignments if provided
+            if (isset($validated['assigned_employee_ids'])) {
+                DB::table('lead_assignments')->where('lead_id', $id)->delete();
+                $assignments = [];
+                $now = now();
+                $assignedIds = !empty($validated['assigned_employee_ids'])
+                    ? array_unique($validated['assigned_employee_ids'])
+                    : (!empty($access['employeeId']) ? [$access['employeeId']] : []);
+
+                foreach ($assignedIds as $empId) {
+                    $assignments[] = [
+                        'lead_id' => $id,
+                        'employee_id' => (int) $empId,
+                        'assigned_by_user_id' => $request->user()->id,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+                }
+                if (!empty($assignments)) {
+                    DB::table('lead_assignments')->insert($assignments);
+                }
             }
-            DB::table('lead_assignments')->insert($assignments);
 
             // Log update activity
             $changeNote = "Lead details updated by {$request->user()->name}.";
@@ -327,7 +351,7 @@ class LeadController extends Controller
                 'user_id' => $request->user()->id,
                 'action' => 'updated',
                 'note' => $changeNote,
-                'created_at' => $now,
+                'created_at' => now(),
             ]);
 
             AuditLog::record(
@@ -378,14 +402,6 @@ class LeadController extends Controller
         $access = $this->verifyLeadAccess($request);
         $lead = DB::table('leads')->where('id', $id)->first();
         abort_unless($lead, 404, 'Lead not found.');
-
-        if (!$access['isHr']) {
-            $isAssigned = DB::table('lead_assignments')
-                ->where('lead_id', $id)
-                ->where('employee_id', $access['employeeId'])
-                ->exists();
-            abort_unless($isAssigned, 403, 'You are not assigned to this lead.');
-        }
 
         $validated = $request->validate([
             'status' => 'sometimes|nullable|in:New,In Progress,Converted,Lost',

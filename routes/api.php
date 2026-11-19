@@ -345,14 +345,13 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:super_admin,hr_admin,hr_executive,manager,payroll_admin,auditor');
 
         // M17 Lead Management Module
+        Route::get('/leads/assignees', [LeadController::class, 'assignees']);
         Route::get('/leads', [LeadController::class, 'index']);
-        Route::post('/leads', [LeadController::class, 'store'])
-            ->middleware('role:super_admin,hr_admin');
+        Route::post('/leads', [LeadController::class, 'store']);
         Route::get('/leads/{id}', [LeadController::class, 'show'])
             ->whereNumber('id');
         Route::put('/leads/{id}', [LeadController::class, 'update'])
-            ->whereNumber('id')
-            ->middleware('role:super_admin,hr_admin');
+            ->whereNumber('id');
         Route::delete('/leads/{id}', [LeadController::class, 'destroy'])
             ->whereNumber('id')
             ->middleware('role:super_admin,hr_admin');

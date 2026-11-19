@@ -815,7 +815,7 @@ class EmployeeController extends Controller
     public function updateLeadAccess(Request $request, int $employeeId): JsonResponse
     {
         $actor = $request->user();
-        abort_unless(in_array($actor->role, ['super_admin', 'hr_admin', 'hr_executive'], true), 403, 'Unauthorized to manage employee lead access.');
+        abort_unless(in_array($actor->role, ['super_admin', 'hr_admin'], true), 403, 'Unauthorized to manage employee lead access.');
 
         $validated = $request->validate([
             'has_lead_access' => 'required|boolean',

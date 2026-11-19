@@ -13,7 +13,7 @@ use Illuminate\Validation\ValidationException;
 
 class LeadController extends Controller
 {
-    private const HR_ROLES = ['super_admin', 'hr_admin', 'hr_executive'];
+    private const HR_ROLES = ['super_admin', 'hr_admin'];
 
     /**
      * Check if user is HR / Admin or an employee with explicit lead access.
@@ -27,21 +27,17 @@ class LeadController extends Controller
             return ['isHr' => true, 'employeeId' => $user->employee_id];
         }
 
-        if ($user->role === 'employee') {
-            if (!$user->employee_id) {
-                abort(403, 'Employee profile not linked to user account.');
-            }
-
+        if ($user->employee_id) {
             $hasAccess = (bool) DB::table('employees')
                 ->where('id', $user->employee_id)
                 ->whereNull('deleted_at')
                 ->value('has_lead_access');
 
-            if (!$hasAccess) {
-                abort(403, 'You do not have permission to access Lead Management. Please contact HR.');
+            if ($hasAccess) {
+                return ['isHr' => false, 'employeeId' => (int) $user->employee_id];
             }
 
-            return ['isHr' => false, 'employeeId' => (int) $user->employee_id];
+            abort(403, 'You do not have permission to access Lead Management. Please contact HR.');
         }
 
         abort(403, 'Unauthorized access to Lead Management.');

@@ -73,7 +73,7 @@ Route::prefix('v1')->group(function () {
 
     Route::middleware('auth:sanctum')->group(function () {
         // M02 Organization
-        Route::prefix('organization')->middleware('role:super_admin,hr_admin,hr_executive,manager,auditor')->group(function () {
+        Route::prefix('organization')->middleware('role:super_admin,hr_admin,hr_executive,manager,auditor,recruiter')->group(function () {
             Route::get('/company', [OrganizationController::class, 'company']);
             Route::get('/branches', [OrganizationController::class, 'branches']);
             Route::get('/departments', [OrganizationController::class, 'departments']);
@@ -104,7 +104,7 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:super_admin,hr_admin');
         Route::patch('/employees/{employeeId}/lead-access', [EmployeeController::class, 'updateLeadAccess'])
             ->whereNumber('employeeId')
-            ->middleware('role:super_admin,hr_admin,hr_executive');
+            ->middleware('role:super_admin,hr_admin');
         Route::get('/employee-staffing-requests', [EmployeeStaffingRequestController::class, 'index'])
             ->middleware('role:manager,super_admin,hr_admin,hr_executive');
         Route::post('/employee-staffing-requests', [EmployeeStaffingRequestController::class, 'store'])
@@ -347,15 +347,15 @@ Route::prefix('v1')->group(function () {
         // M17 Lead Management Module
         Route::get('/leads', [LeadController::class, 'index']);
         Route::post('/leads', [LeadController::class, 'store'])
-            ->middleware('role:super_admin,hr_admin,hr_executive');
+            ->middleware('role:super_admin,hr_admin');
         Route::get('/leads/{id}', [LeadController::class, 'show'])
             ->whereNumber('id');
         Route::put('/leads/{id}', [LeadController::class, 'update'])
             ->whereNumber('id')
-            ->middleware('role:super_admin,hr_admin,hr_executive');
+            ->middleware('role:super_admin,hr_admin');
         Route::delete('/leads/{id}', [LeadController::class, 'destroy'])
             ->whereNumber('id')
-            ->middleware('role:super_admin,hr_admin,hr_executive');
+            ->middleware('role:super_admin,hr_admin');
         Route::patch('/leads/{id}/progress', [LeadController::class, 'updateProgress'])
             ->whereNumber('id');
 

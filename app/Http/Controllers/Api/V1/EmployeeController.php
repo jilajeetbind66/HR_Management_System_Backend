@@ -68,6 +68,9 @@ class EmployeeController extends Controller
                 'employee_statutory_details.tax_regime',
                 'employee_statutory_details.pf_applicable',
                 'employee_statutory_details.esi_applicable',
+                'employee_statutory_details.bank_name',
+                'employee_statutory_details.account_number',
+                'employee_statutory_details.ifsc_code',
             ]);
         }
 

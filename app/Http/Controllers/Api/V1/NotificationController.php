@@ -45,4 +45,17 @@ class NotificationController extends Controller
                 ->first(),
         ]);
     }
+
+    public function markAllRead(Request $request): JsonResponse
+    {
+        DB::table('user_notifications')
+            ->where('user_id', $request->user()->id)
+            ->whereNull('read_at')
+            ->update(['read_at' => now(), 'updated_at' => now()]);
+
+        return response()->json([
+            'message' => 'All notifications marked as read',
+            'unread_count' => 0,
+        ]);
+    }
 }

@@ -61,6 +61,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/auth/change-password', [AuthController::class, 'changePassword']);
         Route::get('/notifications', [NotificationController::class, 'index']);
         Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
+        Route::delete('/notifications/clear-all', [NotificationController::class, 'clearAll']);
         Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead'])
             ->whereNumber('id');
 

@@ -196,6 +196,32 @@ class AttendanceController extends Controller
                 "Requested regularization for {$validated['date']}"
             );
 
+            // Notify Manager / Super Admins
+            $recipientIds = [];
+            $reportingManagerId = DB::table('employees')->where('id', $user->employee_id)->value('reporting_manager_id');
+            if ($reportingManagerId) {
+                $managerUserId = DB::table('users')->where('employee_id', $reportingManagerId)->value('id');
+                if ($managerUserId && (int)$managerUserId !== $user->id) {
+                    $recipientIds[] = (int)$managerUserId;
+                }
+            }
+            if (empty($recipientIds)) {
+                $superAdminIds = DB::table('users')->where('role', 'super_admin')->where('id', '!=', $user->id)->pluck('id')->all();
+                $recipientIds = array_map('intval', $superAdminIds);
+            }
+            $emp = DB::table('employees')->where('id', $user->employee_id)->first();
+            $empName = $emp ? trim($emp->first_name . ' ' . $emp->last_name) : $user->name;
+            foreach (array_unique($recipientIds) as $recId) {
+                DB::table('user_notifications')->insert([
+                    'user_id' => $recId,
+                    'event_key' => 'attendance.regularization_requested',
+                    'title' => "Attendance Regularization: {$empName}",
+                    'message' => "{$empName} requested attendance regularization for {$validated['date']} (Punch Out: {$validated['punch_out_requested']}). Reason: {$validated['reason']}",
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
             return $requestId;
         });
 
@@ -273,6 +299,20 @@ class AttendanceController extends Controller
                 'Attendance',
                 "Marked regularization #{$regularization->id} {$validated['status']}"
             );
+
+            // Notify Employee
+            $employeeUserId = DB::table('users')->where('employee_id', $regularization->employee_id)->value('id');
+            if ($employeeUserId) {
+                $statusText = $validated['status'] === 'approved' ? 'Approved' : 'Rejected';
+                DB::table('user_notifications')->insert([
+                    'user_id' => $employeeUserId,
+                    'event_key' => 'attendance.regularization_reviewed',
+                    'title' => "Attendance Regularization " . ucfirst($statusText),
+                    'message' => "Your attendance regularization request for {$regularization->date} was {$validated['status']} by {$request->user()->name}." . ($validated['status'] === 'approved' ? " Working hours updated to {$workHours} hrs." : ""),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
         });
 
         return response()->json(['message' => "Regularization {$validated['status']}"]);

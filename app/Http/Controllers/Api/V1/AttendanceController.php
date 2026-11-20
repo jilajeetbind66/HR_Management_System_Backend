@@ -130,11 +130,13 @@ class AttendanceController extends Controller
         $user = $request->user();
         $query = DB::table('attendance_regularization_requests')
             ->join('employees', 'attendance_regularization_requests.employee_id', '=', 'employees.id')
+            ->leftJoin('branches', 'employees.branch_id', '=', 'branches.id')
             ->select(
                 'attendance_regularization_requests.*',
                 'employees.first_name',
                 'employees.last_name',
-                'employees.employee_code'
+                'employees.employee_code',
+                'branches.name as branch_name'
             )
             ->orderByDesc('attendance_regularization_requests.id');
 

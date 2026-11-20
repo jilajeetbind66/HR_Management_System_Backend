@@ -73,7 +73,7 @@ Route::prefix('v1')->group(function () {
 
     Route::middleware('auth:sanctum')->group(function () {
         // M02 Organization
-        Route::prefix('organization')->middleware('role:super_admin,hr_admin,hr_executive,manager,auditor,recruiter')->group(function () {
+        Route::prefix('organization')->middleware('role:super_admin,hr_admin,hr_executive,manager,auditor,recruiter,employee')->group(function () {
             Route::get('/company', [OrganizationController::class, 'company']);
             Route::get('/branches', [OrganizationController::class, 'branches']);
             Route::post('/branches', [OrganizationController::class, 'storeBranch'])

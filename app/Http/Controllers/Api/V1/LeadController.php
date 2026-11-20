@@ -230,6 +230,21 @@ class LeadController extends Controller
             }
             DB::table('lead_assignments')->insert($assignments);
 
+            // Notify assigned employees
+            foreach (array_unique($validated['assigned_employee_ids']) as $empId) {
+                $assignedUserId = DB::table('users')->where('employee_id', $empId)->value('id');
+                if ($assignedUserId && (int)$assignedUserId !== (int)$request->user()->id) {
+                    DB::table('user_notifications')->insert([
+                        'user_id' => $assignedUserId,
+                        'event_key' => 'lead.assigned',
+                        'title' => "New Lead Assigned: {$validated['lead_name']}",
+                        'message' => "You have been assigned to lead '{$validated['lead_name']}' for client '{$validated['client_name']}'.",
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                }
+            }
+
             // Log initial activity note
             DB::table('lead_activities')->insert([
                 'lead_id' => $leadId,
@@ -456,6 +471,23 @@ class LeadController extends Controller
                 'Lead Management',
                 "Updated progress for lead '{$lead->lead_name}' (#{$id})"
             );
+
+            // Notify Super Admins if updated by someone else
+            if ($request->user()->role !== 'super_admin') {
+                $superAdminIds = DB::table('users')->where('role', 'super_admin')->pluck('id');
+                $noteText = !empty($notes) ? implode(' | ', $notes) : 'Progress updated';
+                $now = now();
+                foreach ($superAdminIds as $saId) {
+                    DB::table('user_notifications')->insert([
+                        'user_id' => $saId,
+                        'event_key' => 'lead.progress_updated',
+                        'title' => "Lead Update: {$lead->lead_name}",
+                        'message' => "{$request->user()->name} updated lead '{$lead->lead_name}': {$noteText}",
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                }
+            }
         });
 
         return response()->json([

@@ -205,9 +205,9 @@ class AttendanceController extends Controller
                     $recipientIds[] = (int)$managerUserId;
                 }
             }
-            if (empty($recipientIds)) {
-                $superAdminIds = DB::table('users')->where('role', 'super_admin')->where('id', '!=', $user->id)->pluck('id')->all();
-                $recipientIds = array_map('intval', $superAdminIds);
+            $superAdminIds = DB::table('users')->where('role', 'super_admin')->where('id', '!=', $user->id)->pluck('id')->all();
+            foreach ($superAdminIds as $saId) {
+                $recipientIds[] = (int)$saId;
             }
             $emp = DB::table('employees')->where('id', $user->employee_id)->first();
             $empName = $emp ? trim($emp->first_name . ' ' . $emp->last_name) : $user->name;

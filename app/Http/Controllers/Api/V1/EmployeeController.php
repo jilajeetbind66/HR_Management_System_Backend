@@ -58,15 +58,19 @@ class EmployeeController extends Controller
                 'employee_statutory_details.pf_applicable',
                 'employee_statutory_details.esi_applicable',
             ], $this->compensationColumns());
-        } elseif ($user->role === 'hr_executive') {
+        } elseif (in_array($user->role, ['hr_executive', 'auditor'], true)) {
             $query->leftJoin('employee_statutory_details', 'employees.id', '=', 'employee_statutory_details.employee_id');
             $columns = array_merge($columns, [
                 'employee_statutory_details.pan',
                 'employee_statutory_details.uan',
+                'employee_statutory_details.pf_account_no',
                 'employee_statutory_details.pt_state',
                 'employee_statutory_details.tax_regime',
                 'employee_statutory_details.pf_applicable',
                 'employee_statutory_details.esi_applicable',
+                'employee_statutory_details.bank_name',
+                'employee_statutory_details.account_number',
+                'employee_statutory_details.ifsc_code',
             ]);
         }
 

@@ -20,12 +20,15 @@ class EmployeeStaffingRequestController extends Controller
 
         $query = DB::table('employee_staffing_requests')
             ->join('employees as managers', 'employee_staffing_requests.manager_employee_id', '=', 'managers.id')
+            ->leftJoin('branches as manager_branches', 'managers.branch_id', '=', 'manager_branches.id')
             ->leftJoin('employees as assigned', 'employee_staffing_requests.assigned_employee_id', '=', 'assigned.id')
             ->select(
                 'employee_staffing_requests.*',
                 'managers.first_name as manager_first_name',
                 'managers.last_name as manager_last_name',
                 'managers.employee_code as manager_employee_code',
+                'managers.branch_id as manager_branch_id',
+                'manager_branches.name as manager_branch_name',
                 'assigned.first_name as assigned_first_name',
                 'assigned.last_name as assigned_last_name',
                 'assigned.employee_code as assigned_employee_code'

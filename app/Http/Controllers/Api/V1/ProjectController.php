@@ -757,7 +757,18 @@ class ProjectController extends Controller
         abort_unless($penalty->status !== 'waived', 409);
 
         $assignment = DB::table('project_assignments')->where('id', $penalty->assignment_id)->first();
-        abort_unless($assignment && RoleAccess::canManageAssignment($request->user(), $assignment), 403);
+        abort_unless($assignment, 404);
+
+        if ($request->user()->role === 'manager') {
+            abort_if(
+                $request->user()->employee_id && (int) $assignment->employee_id === (int) $request->user()->employee_id,
+                403,
+                'Managers cannot waive their own project penalties.'
+            );
+            abort_unless(RoleAccess::managesEmployee($request->user(), (int) $assignment->employee_id), 403);
+        } else {
+            abort_unless(RoleAccess::canManageAssignment($request->user(), $assignment), 403);
+        }
 
         DB::transaction(function () use ($id, $validated, $request) {
             DB::table('project_penalties')->where('id', $id)->update([

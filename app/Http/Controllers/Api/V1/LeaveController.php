@@ -22,10 +22,14 @@ class LeaveController extends Controller
             ->join('employees', 'leave_balances.employee_id', '=', 'employees.id')
             ->select('leave_balances.*', 'employees.date_of_joining');
 
-        if ($user->role === 'manager' && $request->query('scope') === 'mine') {
-            $query->where('leave_balances.employee_id', $user->employee_id ?? 0);
-        } elseif ($user->role === 'manager') {
-            $query->whereIn('leave_balances.employee_id', RoleAccess::visibleEmployeeIds($user, false));
+        if ($user->role === 'manager') {
+            if ($request->query('scope') === 'mine') {
+                $query->where('leave_balances.employee_id', $user->employee_id ?? 0);
+            } elseif ($request->query('scope') === 'approvals') {
+                $query->whereIn('leave_balances.employee_id', RoleAccess::visibleEmployeeIds($user, false));
+            } else {
+                $query->whereIn('leave_balances.employee_id', RoleAccess::visibleEmployeeIds($user, true));
+            }
         } elseif (!RoleAccess::isHr($user->role)) {
             $query->where('leave_balances.employee_id', $user->employee_id ?? 0);
         }
@@ -79,10 +83,14 @@ class LeaveController extends Controller
             )
             ->orderBy('leave_requests.id', 'desc');
 
-        if ($user->role === 'manager' && $request->query('scope') === 'mine') {
-            $query->where('leave_requests.employee_id', $user->employee_id ?? 0);
-        } elseif ($user->role === 'manager') {
-            $query->whereIn('leave_requests.employee_id', RoleAccess::visibleEmployeeIds($user, false));
+        if ($user->role === 'manager') {
+            if ($request->query('scope') === 'mine') {
+                $query->where('leave_requests.employee_id', $user->employee_id ?? 0);
+            } elseif ($request->query('scope') === 'approvals') {
+                $query->whereIn('leave_requests.employee_id', RoleAccess::visibleEmployeeIds($user, false));
+            } else {
+                $query->whereIn('leave_requests.employee_id', RoleAccess::visibleEmployeeIds($user, true));
+            }
         } elseif (!RoleAccess::isHr($user->role)) {
             $query->where('leave_requests.employee_id', $user->employee_id ?? 0);
         }

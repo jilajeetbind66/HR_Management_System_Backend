@@ -70,4 +70,21 @@ class NotificationController extends Controller
             'unread_count' => 0,
         ]);
     }
+
+    public function destroy(Request $request, int $id): JsonResponse
+    {
+        $deleted = DB::table('user_notifications')
+            ->where('id', $id)
+            ->where('user_id', $request->user()->id)
+            ->delete();
+        abort_unless($deleted, 404, 'Notification not found.');
+
+        return response()->json([
+            'message' => 'Notification deleted',
+            'unread_count' => DB::table('user_notifications')
+                ->where('user_id', $request->user()->id)
+                ->whereNull('read_at')
+                ->count(),
+        ]);
+    }
 }

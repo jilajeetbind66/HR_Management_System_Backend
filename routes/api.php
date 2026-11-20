@@ -62,6 +62,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/notifications', [NotificationController::class, 'index']);
         Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
         Route::delete('/notifications/clear-all', [NotificationController::class, 'clearAll']);
+        Route::delete('/notifications/{id}', [NotificationController::class, 'destroy'])
+            ->whereNumber('id');
         Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead'])
             ->whereNumber('id');
 

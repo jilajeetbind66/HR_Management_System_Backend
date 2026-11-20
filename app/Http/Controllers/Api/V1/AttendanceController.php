@@ -389,4 +389,77 @@ class AttendanceController extends Controller
 
         return response()->json(['message' => "Regularization {$validated['status']}"]);
     }
+
+    public function getShiftSettings(): JsonResponse
+    {
+        $settings = DB::table('attendance_shift_settings')->orderBy('id', 'asc')->first();
+        if (!$settings) {
+            $id = DB::table('attendance_shift_settings')->insertGetId([
+                'shift_name' => 'General Day Shift',
+                'start_time' => '09:30 AM',
+                'end_time' => '06:30 PM',
+                'grace_period_minutes' => 15,
+                'late_mark_threshold' => 3,
+                'auto_half_day_deduction' => true,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            $settings = DB::table('attendance_shift_settings')->where('id', $id)->first();
+        }
+
+        return response()->json(['data' => $settings]);
+    }
+
+    public function updateShiftSettings(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        abort_unless(in_array($user->role, ['super_admin', 'manager', 'hr_admin']), 403, 'Unauthorized.');
+
+        $validated = $request->validate([
+            'shift_name' => 'sometimes|string|max:100',
+            'start_time' => 'required|string',
+            'end_time' => 'required|string',
+            'grace_period_minutes' => 'required|integer|min:0|max:120',
+            'late_mark_threshold' => 'required|integer|min:1|max:10',
+            'auto_half_day_deduction' => 'required|boolean',
+        ]);
+
+        $first = DB::table('attendance_shift_settings')->orderBy('id', 'asc')->first();
+        if ($first) {
+            DB::table('attendance_shift_settings')->where('id', $first->id)->update([
+                'shift_name' => $validated['shift_name'] ?? $first->shift_name,
+                'start_time' => $validated['start_time'],
+                'end_time' => $validated['end_time'],
+                'grace_period_minutes' => $validated['grace_period_minutes'],
+                'late_mark_threshold' => $validated['late_mark_threshold'],
+                'auto_half_day_deduction' => $validated['auto_half_day_deduction'],
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('attendance_shift_settings')->where('id', $first->id)->first();
+        } else {
+            $id = DB::table('attendance_shift_settings')->insertGetId([
+                'shift_name' => $validated['shift_name'] ?? 'General Day Shift',
+                'start_time' => $validated['start_time'],
+                'end_time' => $validated['end_time'],
+                'grace_period_minutes' => $validated['grace_period_minutes'],
+                'late_mark_threshold' => $validated['late_mark_threshold'],
+                'auto_half_day_deduction' => $validated['auto_half_day_deduction'],
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            $updated = DB::table('attendance_shift_settings')->where('id', $id)->first();
+        }
+
+        AuditLog::record(
+            $request,
+            'ATTENDANCE_SHIFT_SETTINGS_UPDATED',
+            'Attendance',
+            "Updated shift timing: {$updated->start_time} - {$updated->end_time}, Grace: {$updated->grace_period_minutes}m, Late threshold: {$updated->late_mark_threshold}"
+        );
+
+        return response()->json([
+            'message' => 'Attendance shift and grace period settings updated successfully',
+            'data' => $updated
+        ]);
+    }
 }

@@ -236,6 +236,10 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:employee,manager,hr_admin,hr_executive,super_admin');
         Route::post('/attendance/regularizations/{id}/review', [AttendanceController::class, 'reviewRegularization'])
             ->middleware('role:manager,hr_admin,hr_executive,super_admin');
+        Route::get('/attendance/shift-settings', [AttendanceController::class, 'getShiftSettings'])
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
+        Route::put('/attendance/shift-settings', [AttendanceController::class, 'updateShiftSettings'])
+            ->middleware('role:manager,hr_admin,hr_executive,super_admin');
 
         // M06 Leaves
         Route::get('/leaves', [LeaveController::class, 'index'])

@@ -39,7 +39,9 @@ class AttendanceController extends Controller
         $user = $request->user();
         $validated = $request->validate([
             'employee_id' => 'required|exists:employees,id',
-            'location' => 'nullable|string'
+            'location' => 'nullable|string',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude' => 'nullable|numeric|between:-180,180',
         ]);
 
         abort_unless($user->employee_id && (int) $user->employee_id === (int) $validated['employee_id'], 403);
@@ -47,6 +49,48 @@ class AttendanceController extends Controller
         $now = Carbon::now(self::ATTENDANCE_TIMEZONE);
         $today = $now->toDateString();
         $timeNow = $now->format('h:i A');
+
+        // GPS Geofence Verification
+        $emp = DB::table('employees')->where('id', $validated['employee_id'])->first();
+        $branch = ($emp && $emp->branch_id) ? DB::table('branches')->where('id', $emp->branch_id)->first() : null;
+
+        $distanceMeters = null;
+        $geofenceStatus = 'verified';
+
+        if ($branch && $branch->geofence_enabled && $branch->latitude !== null && $branch->longitude !== null) {
+            $hasCoords = isset($validated['latitude']) && isset($validated['longitude']) && $validated['latitude'] !== null && $validated['longitude'] !== null;
+            if (!$hasCoords) {
+                return response()->json([
+                    'message' => "GPS Location is required for {$branch->name}. Please enable location permissions in your browser to punch attendance.",
+                    'code' => 'LOCATION_REQUIRED',
+                ], 422);
+            }
+
+            $userLat = (float) $validated['latitude'];
+            $userLng = (float) $validated['longitude'];
+            $branchLat = (float) $branch->latitude;
+            $branchLng = (float) $branch->longitude;
+
+            $distanceMeters = $this->calculateDistanceMeters($branchLat, $branchLng, $userLat, $userLng);
+            $allowedRadius = (int) ($branch->radius_meters ?: 150);
+
+            if ($distanceMeters > $allowedRadius) {
+                $roundedDistance = round($distanceMeters);
+                return response()->json([
+                    'message' => "Punch blocked: You are {$roundedDistance}m away from {$branch->name}. You must be within {$allowedRadius}m of the office to punch.",
+                    'code' => 'GEOFENCE_VIOLATION',
+                    'distance_meters' => round($distanceMeters, 1),
+                    'allowed_radius' => $allowedRadius,
+                ], 422);
+            }
+
+            $geofenceStatus = 'within_geofence';
+        }
+
+        $locationLabel = $validated['location'] ?? ($branch ? $branch->name : 'Web Portal');
+        if ($distanceMeters !== null) {
+            $locationLabel .= ' (' . round($distanceMeters) . 'm)';
+        }
 
         $record = DB::table('attendance_records')
             ->where('employee_id', $validated['employee_id'])
@@ -62,7 +106,7 @@ class AttendanceController extends Controller
         };
 
         if (!$record || !$record->punch_in) {
-            $id = DB::transaction(function () use ($validated, $today, $timeNow, $request, $record) {
+            $id = DB::transaction(function () use ($validated, $today, $timeNow, $request, $record, $distanceMeters, $geofenceStatus, $locationLabel) {
                 if ($record) {
                     DB::table('attendance_records')->where('id', $record->id)->update([
                         'punch_in' => $timeNow,
@@ -70,7 +114,11 @@ class AttendanceController extends Controller
                         'status' => 'Present',
                         'work_hours' => 0,
                         'ip_address' => $request->ip(),
-                        'location' => $validated['location'] ?? 'Web Portal',
+                        'latitude' => isset($validated['latitude']) ? (float)$validated['latitude'] : null,
+                        'longitude' => isset($validated['longitude']) ? (float)$validated['longitude'] : null,
+                        'distance_meters' => $distanceMeters !== null ? round($distanceMeters, 2) : null,
+                        'geofence_status' => $geofenceStatus,
+                        'location' => $locationLabel,
                         'updated_at' => now(),
                     ]);
                     AuditLog::record($request, 'ATTENDANCE_PUNCHED_IN', 'Attendance', "Punched in for {$today}");
@@ -85,7 +133,11 @@ class AttendanceController extends Controller
                     'status' => 'Present',
                     'work_hours' => 0,
                     'ip_address' => $request->ip(),
-                    'location' => $validated['location'] ?? 'Web Portal',
+                    'latitude' => isset($validated['latitude']) ? (float)$validated['latitude'] : null,
+                    'longitude' => isset($validated['longitude']) ? (float)$validated['longitude'] : null,
+                    'distance_meters' => $distanceMeters !== null ? round($distanceMeters, 2) : null,
+                    'geofence_status' => $geofenceStatus,
+                    'location' => $locationLabel,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
@@ -106,11 +158,16 @@ class AttendanceController extends Controller
             );
             $workHours = max(0, round($punchInAt->diffInMinutes($now) / 60, 2));
 
-            DB::transaction(function () use ($record, $timeNow, $today, $workHours, $request) {
+            DB::transaction(function () use ($record, $timeNow, $today, $workHours, $request, $validated, $distanceMeters, $geofenceStatus, $locationLabel) {
                 DB::table('attendance_records')->where('id', $record->id)->update([
                     'punch_out' => $timeNow,
                     'work_hours' => $workHours,
                     'status' => AttendanceStatus::forWorkHours($workHours),
+                    'latitude' => isset($validated['latitude']) ? (float)$validated['latitude'] : $record->latitude,
+                    'longitude' => isset($validated['longitude']) ? (float)$validated['longitude'] : $record->longitude,
+                    'distance_meters' => $distanceMeters !== null ? round($distanceMeters, 2) : $record->distance_meters,
+                    'geofence_status' => $geofenceStatus,
+                    'location' => $locationLabel,
                     'updated_at' => now(),
                 ]);
                 AuditLog::record($request, 'ATTENDANCE_PUNCHED_OUT', 'Attendance', "Punched out for {$today}");
@@ -123,6 +180,19 @@ class AttendanceController extends Controller
         }
 
         return response()->json(['type' => 'already_completed', 'data' => $fetchPunch($record->id)]);
+    }
+
+    private function calculateDistanceMeters(float $lat1, float $lon1, float $lat2, float $lon2): float
+    {
+        $earthRadius = 6371000; // in meters
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLon = deg2rad($lon2 - $lon1);
+        $a = sin($dLat / 2) * sin($dLat / 2) +
+             cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+             sin($dLon / 2) * sin($dLon / 2);
+        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+
+        return $earthRadius * $c;
     }
 
     public function regularizations(Request $request): JsonResponse

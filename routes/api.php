@@ -76,6 +76,8 @@ Route::prefix('v1')->group(function () {
         Route::prefix('organization')->middleware('role:super_admin,hr_admin,hr_executive,manager,auditor,recruiter')->group(function () {
             Route::get('/company', [OrganizationController::class, 'company']);
             Route::get('/branches', [OrganizationController::class, 'branches']);
+            Route::post('/branches', [OrganizationController::class, 'storeBranch'])
+                ->middleware('role:super_admin,hr_admin');
             Route::get('/departments', [OrganizationController::class, 'departments']);
             Route::get('/designations', [OrganizationController::class, 'designations']);
             Route::get('/holidays', [OrganizationController::class, 'holidays']);

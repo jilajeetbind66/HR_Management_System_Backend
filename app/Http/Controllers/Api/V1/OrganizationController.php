@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Support\AuditLog;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class OrganizationController extends Controller
@@ -45,6 +47,64 @@ class OrganizationController extends Controller
             ->get();
 
         return response()->json(['data' => $branches]);
+    }
+
+    public function storeBranch(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:255|unique:branches,name',
+            'code' => 'nullable|string|max:20|unique:branches,code',
+            'city' => 'required|string|max:255',
+            'state' => 'required|string|max:255',
+            'pt_applicable' => 'nullable|boolean',
+            'is_active' => 'nullable|boolean',
+        ]);
+
+        $companyId = DB::table('companies')->value('id') ?? 1;
+
+        if (empty($validated['code'])) {
+            $rawPrefix = preg_replace('/[^A-Za-z0-9]/', '', $validated['city'] ?: $validated['name']);
+            $prefix = strtoupper(substr($rawPrefix, 0, 3));
+            if (strlen($prefix) < 3) {
+                $prefix = str_pad($prefix, 3, 'X');
+            }
+            $nextSeq = (int) DB::table('branches')->max('id') + 1;
+            $code = sprintf('%s-%02d', $prefix, $nextSeq);
+            while (DB::table('branches')->where('code', $code)->exists()) {
+                $code = sprintf('%s-%02d', $prefix, ++$nextSeq);
+            }
+            $validated['code'] = $code;
+        }
+
+        $branchId = DB::table('branches')->insertGetId([
+            'company_id' => $companyId,
+            'name' => $validated['name'],
+            'code' => strtoupper($validated['code']),
+            'city' => $validated['city'],
+            'state' => $validated['state'],
+            'pt_applicable' => (bool) ($validated['pt_applicable'] ?? false),
+            'employees_count' => 0,
+            'is_active' => (bool) ($validated['is_active'] ?? true),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $branch = DB::table('branches')->where('id', $branchId)->first();
+        if ($branch) {
+            $branch->employees_count = 0;
+        }
+
+        AuditLog::record(
+            $request,
+            'BRANCH_CREATED',
+            'Organization',
+            "Created new branch {$branch->name} ({$branch->code}) in {$branch->city}, {$branch->state}"
+        );
+
+        return response()->json([
+            'data' => $branch,
+            'message' => 'Branch created successfully.',
+        ], 201);
     }
 
     public function departments(): JsonResponse

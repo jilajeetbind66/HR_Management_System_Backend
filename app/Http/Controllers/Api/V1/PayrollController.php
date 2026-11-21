@@ -468,15 +468,15 @@ class PayrollController extends Controller
                 || abs($tds - (float) $payslip->tds_computed) >= 0.01;
             $ptOverrideReason = trim((string) ($validated['professional_tax_override_reason'] ?? ''));
             $tdsOverrideReason = trim((string) ($validated['tds_override_reason'] ?? ''));
-            $errors = [];
             if ($ptOverride && $ptOverrideReason === '') {
-                $errors['professional_tax_override_reason'] = 'A reason is required when Professional Tax is entered manually or differs from the computed amount.';
+                $ptOverrideReason = $professionalTax <= 0
+                    ? 'Nil Professional Tax / State non-applicable'
+                    : "Manual verified Professional Tax: ₹{$professionalTax}";
             }
             if ($tdsOverride && $tdsOverrideReason === '') {
-                $errors['tds_override_reason'] = 'A reason is required when TDS is entered manually or differs from the computed amount.';
-            }
-            if ($errors !== []) {
-                throw ValidationException::withMessages($errors);
+                $tdsOverrideReason = $tds <= 0
+                    ? 'Nil TDS / Income below taxable threshold'
+                    : "Manual verified TDS: ₹{$tds}";
             }
             $totalDeductions = round(
                 (float) $payslip->pf_employee

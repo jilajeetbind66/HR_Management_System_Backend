@@ -142,6 +142,7 @@ class UploadController extends Controller
 
         $documents = DB::table('hrms_uploads')
             ->leftJoin('employees', 'hrms_uploads.employee_id', '=', 'employees.id')
+            ->leftJoin('branches', 'employees.branch_id', '=', 'branches.id')
             ->where('hrms_uploads.module', 'employee_documents')
             ->when($employeeId, fn ($query) => $query->where('hrms_uploads.employee_id', $employeeId))
             ->select(
@@ -155,6 +156,7 @@ class UploadController extends Controller
                 'hrms_uploads.reviewed_at',
                 'hrms_uploads.review_note',
                 'hrms_uploads.created_at',
+                'branches.name as branch_name',
                 'reviewers.name as reviewed_by_name',
                 'employees.first_name',
                 'employees.last_name',

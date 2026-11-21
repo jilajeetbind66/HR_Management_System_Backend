@@ -169,12 +169,15 @@ class DocumentsController extends Controller
         $user = $request->user();
         $query = DB::table('hr_letters')
             ->join('employees', 'hr_letters.employee_id', '=', 'employees.id')
+            ->leftJoin('branches', 'employees.branch_id', '=', 'branches.id')
             ->leftJoin('users as creators', 'hr_letters.created_by_user_id', '=', 'creators.id')
             ->select(
                 'hr_letters.*',
                 'employees.employee_code',
                 'employees.first_name',
                 'employees.last_name',
+                'employees.branch_id',
+                'branches.name as branch_name',
                 'creators.name as created_by_name'
             )
             ->orderByDesc('hr_letters.id');
@@ -333,12 +336,15 @@ class DocumentsController extends Controller
     {
         $letter = DB::table('hr_letters')
             ->join('employees', 'hr_letters.employee_id', '=', 'employees.id')
+            ->leftJoin('branches', 'employees.branch_id', '=', 'branches.id')
             ->leftJoin('users as creators', 'hr_letters.created_by_user_id', '=', 'creators.id')
             ->select(
                 'hr_letters.*',
                 'employees.employee_code',
                 'employees.first_name',
                 'employees.last_name',
+                'employees.branch_id',
+                'branches.name as branch_name',
                 'creators.name as created_by_name'
             )
             ->where('hr_letters.id', $id)

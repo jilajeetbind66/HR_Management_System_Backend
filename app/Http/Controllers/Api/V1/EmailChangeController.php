@@ -51,7 +51,13 @@ class EmailChangeController extends Controller
                 return ['status' => 'unauthorized'];
             }
 
-            if (User::where('email', $emailChange->new_email)->where('id', '<>', $user->id)->exists()) {
+            if (
+                User::where('email', $emailChange->new_email)->where('id', '<>', $user->id)->exists()
+                || DB::table('employees')
+                    ->where('email', $emailChange->new_email)
+                    ->when($user->employee_id, fn ($q) => $q->where('id', '<>', $user->employee_id))
+                    ->exists()
+            ) {
                 DB::table('email_change_tokens')->where('user_id', $user->id)->delete();
                 return ['status' => 'email_taken'];
             }
@@ -60,6 +66,15 @@ class EmailChangeController extends Controller
             $user->email_verified_at = now();
             $user->save();
             $user->tokens()->delete();
+
+            if ($user->employee_id) {
+                DB::table('employees')
+                    ->where('id', $user->employee_id)
+                    ->update([
+                        'email' => $emailChange->new_email,
+                        'updated_at' => now(),
+                    ]);
+            }
 
             DB::table('email_change_tokens')->where('user_id', $user->id)->delete();
             DB::table('audit_logs')->insert([
@@ -95,6 +110,18 @@ class EmailChangeController extends Controller
 
     private function sendVerification(Request $request, User $target): JsonResponse
     {
+        if (
+            $target->employee_id
+            && DB::table('employees')
+                ->where('id', $target->employee_id)
+                ->whereNotNull('deleted_at')
+                ->exists()
+        ) {
+            return response()->json([
+                'message' => 'Cannot change login email for an archived employee account.',
+            ], 409);
+        }
+
         if (config('mail.default') === 'log') {
             return response()->json([
                 'message' => 'Email delivery is not configured. Configure an SMTP or supported mail transport before changing login emails.',
@@ -119,7 +146,8 @@ class EmailChangeController extends Controller
                 'email',
                 'max:255',
                 Rule::unique('users', 'email')->ignore($target->id),
-                Rule::unique('email_change_tokens', 'new_email'),
+                Rule::unique('employees', 'email')->ignore($target->employee_id ?? 0),
+                Rule::unique('email_change_tokens', 'new_email')->whereNot('user_id', $target->id),
             ],
             'email_confirmation' => ['required', 'same:email'],
             'current_password' => ['required', 'string'],

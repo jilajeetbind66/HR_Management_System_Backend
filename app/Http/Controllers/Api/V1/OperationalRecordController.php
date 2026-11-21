@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
+use App\Support\EmployeeAccountProvisioner;
+use App\Support\EmployeeAccountSetupNotifier;
 use App\Support\EmployeeConstants;
 use App\Support\EmployeeOrganization;
 use App\Support\ProbationStatus;
@@ -123,6 +126,7 @@ class OperationalRecordController extends Controller
 
             $candidateId = DB::table('recruitment_candidates')->insertGetId([
                 ...$validated,
+                'last_name' => trim((string) ($validated['last_name'] ?? '')),
                 'stage' => 'Applied',
                 'created_at' => now(),
                 'updated_at' => now(),
@@ -234,7 +238,7 @@ class OperationalRecordController extends Controller
             $employeeId = DB::table('employees')->insertGetId([
                 'employee_code' => $employeeCode,
                 'first_name' => $candidate->first_name,
-                'last_name' => $candidate->last_name,
+                'last_name' => trim((string) ($candidate->last_name ?? '')),
                 'email' => $candidate->email,
                 'phone' => $candidate->phone,
                 'gender' => EmployeeConstants::GENDER_OTHER,
@@ -263,6 +267,25 @@ class OperationalRecordController extends Controller
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
+
+            // Auto-provision login account for converted employee as documented in architecture guide
+            $provisioner = new EmployeeAccountProvisioner();
+            $provisioner->provision(
+                $employeeId,
+                trim($candidate->first_name . ' ' . ($candidate->last_name ?? '')),
+                $candidate->email,
+                'employee'
+            );
+
+            $createdUser = User::where('employee_id', $employeeId)->first();
+            if ($createdUser && config('mail.default') !== 'log') {
+                try {
+                    $notifier = new EmployeeAccountSetupNotifier();
+                    $notifier->send($createdUser, $employeeCode, 'employee');
+                } catch (\Throwable $e) {
+                    report($e);
+                }
+            }
 
             DB::table('recruitment_candidates')->where('id', $candidate->id)->update([
                 'employee_id' => $employeeId,

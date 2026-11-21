@@ -64,8 +64,12 @@ class UploadController extends Controller
         }
 
         if ($module === 'leave_certificates' && !RoleAccess::isHr($user->role)) {
-            abort_unless($user->employee_id, 403);
-            $query->where('employee_id', $user->employee_id);
+            if ($user->role === 'manager') {
+                $query->whereIn('employee_id', RoleAccess::visibleEmployeeIds($user));
+            } else {
+                abort_unless($user->employee_id, 403);
+                $query->where('employee_id', $user->employee_id);
+            }
         }
 
         if ($module === 'training_certificates' && !RoleAccess::isHr($user->role)) {
@@ -381,7 +385,7 @@ class UploadController extends Controller
         $isHr = $this->isHr($user->role);
 
         if ($module === 'leave_certificates') {
-            if ($isDownload && $isHr) {
+            if ($isDownload && ($isHr || ($user->role === 'manager' && RoleAccess::managesEmployee($user, (int) $employeeId)))) {
                 return;
             }
             abort_unless(
@@ -415,8 +419,9 @@ class UploadController extends Controller
             if ($recordId && !DB::table('expense_claims')
                 ->where('id', $recordId)
                 ->where('employee_id', $employeeId)
+                ->when(!$isDownload, fn ($q) => $q->where('status', 'submitted'))
                 ->exists()) {
-                abort(403);
+                abort(403, $isDownload ? 'Forbidden.' : 'Receipts can only be uploaded to submitted expense claims.');
             }
 
             if (!$isDownload && !$recordId) {

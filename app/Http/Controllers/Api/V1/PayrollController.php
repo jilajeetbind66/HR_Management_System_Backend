@@ -29,7 +29,10 @@ class PayrollController extends Controller
             ->join('payroll_runs', 'payroll_runs.id', '=', 'payslips.payroll_run_id')
             ->join('employees', 'employees.id', '=', 'payslips.employee_id')
             ->where('payslips.employee_id', $employeeId)
-            ->whereIn('payroll_runs.status', ['published', 'locked'])
+            ->where(function ($query) {
+                $query->whereIn('payroll_runs.status', ['published', 'locked'])
+                    ->orWhere('payslips.payment_status', 'paid');
+            })
             ->where('payslips.deductions_confirmed', true)
             ->select([
                 'payslips.id',
@@ -56,6 +59,17 @@ class PayrollController extends Controller
                 'payslips.total_deductions',
                 'payslips.net_salary',
                 'payslips.payment_status',
+                'payslips.payment_mode',
+                'payslips.payment_reference',
+                'payslips.paid_at',
+                'payslips.paid_by',
+                'payslips.custom_bonus',
+                'payslips.custom_bonus_label',
+                'payslips.late_penalty_days',
+                'payslips.late_penalty_amount',
+                'payslips.late_count_summary',
+                'payslips.other_penalty_amount',
+                'payslips.other_penalty_reason',
                 'payroll_runs.period_year',
                 'payroll_runs.period_month',
                 'payroll_runs.month_name',
@@ -109,6 +123,17 @@ class PayrollController extends Controller
                 'payslips.total_deductions',
                 'payslips.net_salary',
                 'payslips.payment_status',
+                'payslips.payment_mode',
+                'payslips.payment_reference',
+                'payslips.paid_at',
+                'payslips.paid_by',
+                'payslips.custom_bonus',
+                'payslips.custom_bonus_label',
+                'payslips.late_penalty_days',
+                'payslips.late_penalty_amount',
+                'payslips.late_count_summary',
+                'payslips.other_penalty_amount',
+                'payslips.other_penalty_reason',
                 'payslips.deductions_confirmed',
                 'employees.employee_code',
                 'employees.first_name',
@@ -154,6 +179,21 @@ class PayrollController extends Controller
 
         if (DB::table('payroll_runs')->where($period)->exists()) {
             return $this->duplicateRunResponse();
+        }
+
+        $overlappingEmployees = DB::table('payslips')
+            ->join('payroll_runs', 'payslips.payroll_run_id', '=', 'payroll_runs.id')
+            ->join('employees', 'payslips.employee_id', '=', 'employees.id')
+            ->where('payroll_runs.period_year', $validated['period_year'])
+            ->where('payroll_runs.period_month', $validated['period_month'])
+            ->where('employees.is_demo', $demoScope)
+            ->when($branchId, fn ($q) => $q->where('employees.branch_id', $branchId))
+            ->exists();
+        if ($overlappingEmployees) {
+            return response()->json([
+                'message' => 'One or more employees in this scope already have a payslip generated for this period in another payroll run.',
+                'code' => 'PAYROLL_OVERLAPPING_SCOPE',
+            ], 409);
         }
 
         $employees = DB::table('employees')
@@ -304,7 +344,7 @@ class PayrollController extends Controller
                             $validated['period_month'],
                             1
                         )->daysInMonth, 2),
-                        max(0, round($gross - $pf - $esi, 2))
+                        max(0, round($gross - $pf - $esi - ($professionalTax ?? 0) - ($tds ?? 0), 2))
                     );
                     $baseDeductions = round($pf + $esi + $lopDeduction + ($professionalTax ?? 0) + ($tds ?? 0), 2);
 
@@ -334,6 +374,17 @@ class PayrollController extends Controller
                         'tds_override_reason' => null,
                         'lop_days' => $lopDays,
                         'lop_deduction' => $lopDeduction,
+                        'late_penalty_days' => 0,
+                        'late_penalty_amount' => 0,
+                        'late_count_summary' => null,
+                        'other_penalty_amount' => 0,
+                        'other_penalty_reason' => null,
+                        'custom_bonus' => 0,
+                        'custom_bonus_label' => null,
+                        'payment_mode' => null,
+                        'payment_reference' => null,
+                        'paid_at' => null,
+                        'paid_by' => null,
                         'total_deductions' => $baseDeductions,
                         'net_salary' => round($gross - $baseDeductions, 2),
                         'payment_status' => 'unpaid',
@@ -417,15 +468,15 @@ class PayrollController extends Controller
                 || abs($tds - (float) $payslip->tds_computed) >= 0.01;
             $ptOverrideReason = trim((string) ($validated['professional_tax_override_reason'] ?? ''));
             $tdsOverrideReason = trim((string) ($validated['tds_override_reason'] ?? ''));
-            $errors = [];
             if ($ptOverride && $ptOverrideReason === '') {
-                $errors['professional_tax_override_reason'] = 'A reason is required when Professional Tax is entered manually or differs from the computed amount.';
+                $ptOverrideReason = $professionalTax <= 0
+                    ? 'Nil Professional Tax / State non-applicable'
+                    : "Manual verified Professional Tax: ₹{$professionalTax}";
             }
             if ($tdsOverride && $tdsOverrideReason === '') {
-                $errors['tds_override_reason'] = 'A reason is required when TDS is entered manually or differs from the computed amount.';
-            }
-            if ($errors !== []) {
-                throw ValidationException::withMessages($errors);
+                $tdsOverrideReason = $tds <= 0
+                    ? 'Nil TDS / Income below taxable threshold'
+                    : "Manual verified TDS: ₹{$tds}";
             }
             $totalDeductions = round(
                 (float) $payslip->pf_employee
@@ -500,6 +551,169 @@ class PayrollController extends Controller
         });
 
         return response()->json(['data' => $result]);
+    }
+
+    public function markIndividualPaid(Request $request, int $runId, int $payslipId): JsonResponse
+    {
+        $user = $request->user();
+        abort_unless($user->role === 'super_admin', 403, 'Unauthorized. Only Super Admin can process individual salary payments.');
+
+        $validated = $request->validate([
+            'payment_status' => 'required|in:paid,unpaid',
+            'payment_mode' => 'nullable|string|max:50',
+            'payment_reference' => 'nullable|string|max:100',
+            'paid_at' => 'nullable|date',
+        ]);
+
+        $payslip = DB::table('payslips')
+            ->where('id', $payslipId)
+            ->where('payroll_run_id', $runId)
+            ->first();
+        abort_unless($payslip, 404, 'Payslip not found for this payroll run.');
+
+        $isPaid = $validated['payment_status'] === 'paid';
+        $updateData = [
+            'payment_status' => $validated['payment_status'],
+            'payment_mode' => $isPaid ? ($validated['payment_mode'] ?? 'Bank Transfer') : null,
+            'payment_reference' => $isPaid ? ($validated['payment_reference'] ?? null) : null,
+            'paid_at' => $isPaid ? ($validated['paid_at'] ? Carbon::parse($validated['paid_at']) : now()) : null,
+            'paid_by' => $isPaid ? $user->name : null,
+            'updated_at' => now(),
+        ];
+
+        DB::table('payslips')->where('id', $payslipId)->update($updateData);
+
+        AuditLog::record(
+            $request,
+            'PAYROLL_INDIVIDUAL_PAYMENT',
+            'Payroll',
+            "Super Admin marked payslip #{$payslipId} as {$validated['payment_status']} (Mode: {$updateData['payment_mode']}, Ref: {$updateData['payment_reference']})."
+        );
+
+        $updatedPayslip = DB::table('payslips')
+            ->join('employees', 'employees.id', '=', 'payslips.employee_id')
+            ->where('payslips.id', $payslipId)
+            ->select([
+                'payslips.*',
+                'employees.employee_code',
+                'employees.first_name',
+                'employees.last_name',
+                'employees.designation',
+            ])
+            ->first();
+        $updatedPayslip->deductions_confirmed = (bool) $updatedPayslip->deductions_confirmed;
+        $updatedPayslip->component_breakdown = json_decode((string) $updatedPayslip->component_breakdown, true) ?: [];
+
+        return response()->json([
+            'message' => "Salary payment status updated to {$validated['payment_status']}.",
+            'data' => $updatedPayslip,
+        ]);
+    }
+
+    public function updatePayslipAdjustments(Request $request, int $runId, int $payslipId): JsonResponse
+    {
+        $user = $request->user();
+        abort_unless($user->role === 'super_admin', 403, 'Unauthorized. Only Super Admin can adjust employee salary and penalties.');
+
+        $validated = $request->validate([
+            'custom_bonus' => 'nullable|numeric|min:0',
+            'custom_bonus_label' => 'nullable|string|max:150',
+            'late_penalty_days' => 'nullable|numeric|min:0',
+            'late_penalty_amount' => 'nullable|numeric|min:0',
+            'late_count_summary' => 'nullable|string|max:255',
+            'other_penalty_amount' => 'nullable|numeric|min:0',
+            'other_penalty_reason' => 'nullable|string|max:255',
+            'professional_tax' => 'nullable|numeric|min:0',
+            'tds' => 'nullable|numeric|min:0',
+        ]);
+
+        return DB::transaction(function () use ($runId, $payslipId, $validated, $request) {
+            $run = DB::table('payroll_runs')->where('id', $runId)->lockForUpdate()->first();
+            abort_unless($run, 404, 'Payroll run not found.');
+            abort_if($run->status === 'locked', 409, 'Cannot adjust payslips for a locked payroll run.');
+
+            $payslip = DB::table('payslips')
+                ->where('id', $payslipId)
+                ->where('payroll_run_id', $runId)
+                ->lockForUpdate()
+                ->first();
+            abort_unless($payslip, 404, 'Payslip not found.');
+
+            $gross = (float) $payslip->gross_salary;
+            $customBonus = round((float) ($validated['custom_bonus'] ?? $payslip->custom_bonus ?? 0), 2);
+            $customBonusLabel = trim((string) ($validated['custom_bonus_label'] ?? $payslip->custom_bonus_label ?? ''));
+
+            $pf = (float) $payslip->pf_employee;
+            $esi = (float) $payslip->esi_employee;
+            $pt = isset($validated['professional_tax']) ? round((float) $validated['professional_tax'], 2) : (float) $payslip->professional_tax;
+            $tds = isset($validated['tds']) ? round((float) $validated['tds'], 2) : (float) $payslip->tds;
+            $lopDeduction = (float) $payslip->lop_deduction;
+
+            $latePenaltyDays = round((float) ($validated['late_penalty_days'] ?? $payslip->late_penalty_days ?? 0), 2);
+            $latePenaltyAmount = round((float) ($validated['late_penalty_amount'] ?? $payslip->late_penalty_amount ?? 0), 2);
+            $lateCountSummary = trim((string) ($validated['late_count_summary'] ?? $payslip->late_count_summary ?? ''));
+
+            $otherPenaltyAmount = round((float) ($validated['other_penalty_amount'] ?? $payslip->other_penalty_amount ?? 0), 2);
+            $otherPenaltyReason = trim((string) ($validated['other_penalty_reason'] ?? $payslip->other_penalty_reason ?? ''));
+
+            $totalDeductions = round($pf + $esi + $pt + $tds + $lopDeduction + $latePenaltyAmount + $otherPenaltyAmount, 2);
+            $netSalary = max(0, round($gross + $customBonus - $totalDeductions, 2));
+
+            DB::table('payslips')->where('id', $payslipId)->update([
+                'custom_bonus' => $customBonus,
+                'custom_bonus_label' => $customBonus > 0 ? ($customBonusLabel ?: 'Custom Bonus / Incentive') : null,
+                'professional_tax' => $pt,
+                'tds' => $tds,
+                'late_penalty_days' => $latePenaltyDays,
+                'late_penalty_amount' => $latePenaltyAmount,
+                'late_count_summary' => $latePenaltyAmount > 0 ? ($lateCountSummary ?: 'Late Mark Penalty') : null,
+                'other_penalty_amount' => $otherPenaltyAmount,
+                'other_penalty_reason' => $otherPenaltyAmount > 0 ? ($otherPenaltyReason ?: 'Policy / Disciplinary Deduction') : null,
+                'total_deductions' => $totalDeductions,
+                'net_salary' => $netSalary,
+                'deductions_confirmed' => true,
+                'updated_at' => now(),
+            ]);
+
+            $totals = DB::table('payslips')
+                ->where('payroll_run_id', $runId)
+                ->selectRaw('COUNT(*) as total_employees, SUM(gross_salary + custom_bonus) as gross_total, SUM(total_deductions) as deductions_total, SUM(net_salary) as net_total')
+                ->first();
+
+            DB::table('payroll_runs')->where('id', $runId)->update([
+                'total_employees' => $totals->total_employees,
+                'gross_payout_inr' => round((float) $totals->gross_total, 2),
+                'total_deductions_inr' => round((float) $totals->deductions_total, 2),
+                'net_payout_inr' => round((float) $totals->net_total, 2),
+                'updated_at' => now(),
+            ]);
+
+            AuditLog::record(
+                $request,
+                'PAYROLL_PAYSLIP_ADJUSTMENT',
+                'Payroll',
+                "Super Admin adjusted salary & penalties for payslip #{$payslipId} (Bonus: ₹{$customBonus}, Late Pen: ₹{$latePenaltyAmount}, Other Pen: ₹{$otherPenaltyAmount})."
+            );
+
+            $updatedPayslip = DB::table('payslips')
+                ->join('employees', 'employees.id', '=', 'payslips.employee_id')
+                ->where('payslips.id', $payslipId)
+                ->select([
+                    'payslips.*',
+                    'employees.employee_code',
+                    'employees.first_name',
+                    'employees.last_name',
+                    'employees.designation',
+                ])
+                ->first();
+            $updatedPayslip->deductions_confirmed = (bool) $updatedPayslip->deductions_confirmed;
+            $updatedPayslip->component_breakdown = json_decode((string) $updatedPayslip->component_breakdown, true) ?: [];
+
+            return response()->json([
+                'message' => 'Payslip adjustments and penalties successfully saved.',
+                'data' => $updatedPayslip,
+            ]);
+        });
     }
 
     public function verify(Request $request, int $id): JsonResponse
@@ -762,17 +976,50 @@ class PayrollController extends Controller
             }
         }
 
+        $paidLeaveDates = DB::table('leave_requests')
+            ->whereIn('employee_id', $employeeIds)
+            ->where('status', 'approved')
+            ->where('leave_type', '<>', 'Leave Without Pay (LOP)')
+            ->where('from_date', '<=', $periodEnd->toDateString())
+            ->where('to_date', '>=', $periodStart->toDateString())
+            ->get(['employee_id', 'from_date', 'to_date', 'is_half_day', 'counted_dates']);
+
+        $paidDaysByDate = [];
+        foreach ($paidLeaveDates as $leave) {
+            $countedDates = is_string($leave->counted_dates) ? json_decode($leave->counted_dates, true) : $leave->counted_dates;
+            if (!is_array($countedDates) || $countedDates === []) {
+                $countedDates = LeaveDayCalculator::calculate(
+                    (int) $leave->employee_id,
+                    $leave->from_date,
+                    $leave->to_date,
+                    (bool) $leave->is_half_day
+                )['included_dates'];
+            }
+            foreach ($countedDates as $date) {
+                if ($date >= $periodStart->toDateString() && $date <= $periodEnd->toDateString()) {
+                    $paidDaysByDate[$leave->employee_id][$date] = max(
+                        $paidDaysByDate[$leave->employee_id][$date] ?? 0,
+                        $leave->is_half_day ? 0.5 : 1.0
+                    );
+                }
+            }
+        }
+
         $attendance = DB::table('attendance_records')
             ->whereIn('employee_id', $employeeIds)
             ->whereBetween('date', [$periodStart->toDateString(), $periodEnd->toDateString()])
             ->whereIn('status', ['Absent', 'Half Day'])
             ->get(['employee_id', 'date', 'status']);
         foreach ($attendance as $record) {
-            $attendanceLopDays = $record->status === 'Absent' ? 1 : 0.5;
-            $lopDaysByDate[$record->employee_id][$record->date] = max(
-                $lopDaysByDate[$record->employee_id][$record->date] ?? 0,
-                $attendanceLopDays
-            );
+            $attendanceLopDays = $record->status === 'Absent' ? 1.0 : 0.5;
+            $paidCoverage = (float) ($paidDaysByDate[$record->employee_id][$record->date] ?? 0);
+            $netAttendanceLop = max(0.0, $attendanceLopDays - $paidCoverage);
+            if ($netAttendanceLop > 0) {
+                $lopDaysByDate[$record->employee_id][$record->date] = max(
+                    $lopDaysByDate[$record->employee_id][$record->date] ?? 0,
+                    $netAttendanceLop
+                );
+            }
         }
 
         $daysByEmployee = [];

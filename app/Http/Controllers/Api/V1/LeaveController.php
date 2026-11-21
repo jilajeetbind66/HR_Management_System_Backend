@@ -22,10 +22,14 @@ class LeaveController extends Controller
             ->join('employees', 'leave_balances.employee_id', '=', 'employees.id')
             ->select('leave_balances.*', 'employees.date_of_joining');
 
-        if ($user->role === 'manager' && $request->query('scope') === 'mine') {
-            $query->where('leave_balances.employee_id', $user->employee_id ?? 0);
-        } elseif ($user->role === 'manager') {
-            $query->whereIn('leave_balances.employee_id', RoleAccess::visibleEmployeeIds($user, false));
+        if ($user->role === 'manager') {
+            if ($request->query('scope') === 'mine') {
+                $query->where('leave_balances.employee_id', $user->employee_id ?? 0);
+            } elseif ($request->query('scope') === 'approvals') {
+                $query->whereIn('leave_balances.employee_id', RoleAccess::visibleEmployeeIds($user, false));
+            } else {
+                $query->whereIn('leave_balances.employee_id', RoleAccess::visibleEmployeeIds($user, true));
+            }
         } elseif (!RoleAccess::isHr($user->role)) {
             $query->where('leave_balances.employee_id', $user->employee_id ?? 0);
         }
@@ -79,10 +83,14 @@ class LeaveController extends Controller
             )
             ->orderBy('leave_requests.id', 'desc');
 
-        if ($user->role === 'manager' && $request->query('scope') === 'mine') {
-            $query->where('leave_requests.employee_id', $user->employee_id ?? 0);
-        } elseif ($user->role === 'manager') {
-            $query->whereIn('leave_requests.employee_id', RoleAccess::visibleEmployeeIds($user, false));
+        if ($user->role === 'manager') {
+            if ($request->query('scope') === 'mine') {
+                $query->where('leave_requests.employee_id', $user->employee_id ?? 0);
+            } elseif ($request->query('scope') === 'approvals') {
+                $query->whereIn('leave_requests.employee_id', RoleAccess::visibleEmployeeIds($user, false));
+            } else {
+                $query->whereIn('leave_requests.employee_id', RoleAccess::visibleEmployeeIds($user, true));
+            }
         } elseif (!RoleAccess::isHr($user->role)) {
             $query->where('leave_requests.employee_id', $user->employee_id ?? 0);
         }
@@ -263,6 +271,32 @@ class LeaveController extends Controller
                 ->orderBy('date')
                 ->pluck('date')
                 ->all();
+
+            // Dispatch in-app notification to Reporting Manager & Super Admins
+            $emp = DB::table('employees')->where('id', $user->employee_id)->first();
+            $empName = $emp ? trim($emp->first_name . ' ' . $emp->last_name) : $user->name;
+            $recipientIds = [];
+            if ($emp && $emp->reporting_manager_id) {
+                $managerUserId = DB::table('users')->where('employee_id', $emp->reporting_manager_id)->value('id');
+                if ($managerUserId && (int)$managerUserId !== (int)$user->id) {
+                    $recipientIds[] = (int)$managerUserId;
+                }
+            }
+            $superAdminIds = DB::table('users')->where('role', 'super_admin')->where('id', '!=', $user->id)->pluck('id')->all();
+            foreach ($superAdminIds as $saId) {
+                $recipientIds[] = (int)$saId;
+            }
+            $now = now();
+            foreach (array_unique($recipientIds) as $recId) {
+                DB::table('user_notifications')->insert([
+                    'user_id' => $recId,
+                    'event_key' => 'leave.applied',
+                    'title' => "Leave Request: {$empName}",
+                    'message' => "{$empName} applied for {$days} day(s) of {$validated['leave_type']} ({$validated['from_date']} to {$validated['to_date']}).",
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+            }
 
             return ['id' => $leaveId, 'days' => $days, 'punch_dates' => $punchDates];
         });
@@ -492,9 +526,24 @@ class LeaveController extends Controller
         }
 
         $managerId = DB::table('employees')->where('id', $employeeId)->value('reporting_manager_id');
-        return $managerId
-            ? ['stage' => 'Manager Approval', 'next_approver_role' => 'manager']
-            : ['stage' => 'No manager assigned', 'next_approver_role' => 'hr'];
+        if ($managerId) {
+            $managerUser = DB::table('users')
+                ->join('employees', 'employees.id', '=', 'users.employee_id')
+                ->where('users.employee_id', $managerId)
+                ->whereNull('employees.deleted_at')
+                ->first(['users.role']);
+            if ($managerUser?->role === 'super_admin') {
+                return ['stage' => 'Super Admin Approval', 'next_approver_role' => 'super_admin'];
+            }
+            if (in_array($managerUser?->role, ['hr_admin', 'hr_executive'], true)) {
+                return ['stage' => 'HR Approval', 'next_approver_role' => 'hr'];
+            }
+            if ($managerUser?->role === 'manager') {
+                return ['stage' => 'Manager Approval', 'next_approver_role' => 'manager'];
+            }
+        }
+
+        return ['stage' => 'No manager assigned', 'next_approver_role' => 'hr'];
     }
 
     private function applicantRole(int $employeeId): string

@@ -36,7 +36,12 @@ class ProjectController extends Controller
      */
     public function mine(Request $request): JsonResponse
     {
-        abort_unless($request->user()->employee_id, 403);
+        if (!$request->user()->employee_id) {
+            return response()->json([
+                'data' => [],
+                'meta' => ['total' => 0, 'version' => '1.2'],
+            ]);
+        }
 
         return $this->projectList($request, 'mine');
     }
@@ -177,8 +182,11 @@ class ProjectController extends Controller
         }
 
         $project = DB::transaction(function () use ($validated, $request) {
-            $count = DB::table('projects')->count();
-            $code = 'PRJ-2026-' . str_pad($count + 1, 3, '0', STR_PAD_LEFT);
+            $year = now()->format('Y');
+            $nextNumber = (int) DB::table('projects')->max('id') + 1;
+            do {
+                $code = 'PRJ-' . $year . '-' . str_pad((string) $nextNumber++, 3, '0', STR_PAD_LEFT);
+            } while (DB::table('projects')->where('project_code', $code)->exists());
 
             $projectId = DB::table('projects')->insertGetId([
                 'project_code' => $code,
@@ -213,6 +221,18 @@ class ProjectController extends Controller
                 'Projects',
                 "Created project {$code} and assigned it to employee {$validated['assigned_employee_id']}"
             );
+
+            $assignedUserId = DB::table('users')->where('employee_id', $validated['assigned_employee_id'])->value('id');
+            if ($assignedUserId) {
+                DB::table('user_notifications')->insert([
+                    'user_id' => $assignedUserId,
+                    'event_key' => 'project.assigned',
+                    'title' => "New Project Assigned: {$validated['name']}",
+                    'message' => "You have been assigned project '{$validated['name']}' ({$code}) by {$request->user()->name}. Deadline: {$validated['planned_end_date']}.",
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
 
             return DB::table('projects')
                 ->leftJoin('project_assignments', 'projects.id', '=', 'project_assignments.project_id')
@@ -261,6 +281,20 @@ class ProjectController extends Controller
             return response()->json(['message' => 'Assignment not found', 'code' => 'NOT_FOUND'], 404);
         }
         abort_unless(RoleAccess::canUpdateAssignment($request->user(), $assignment), 403);
+        if ($assignment->status !== 'in_progress') {
+            return response()->json([
+                'message' => 'Progress can only be updated while a project is in progress.',
+                'code' => 'INVALID_STATE',
+            ], 409);
+        }
+
+        // Industry Standard Rule: Milestone progress cannot decrease arbitrarily
+        if ((int) $validated['progress_percent'] < (int) $assignment->progress_percent) {
+            return response()->json([
+                'message' => "Progress cannot be reduced from {$assignment->progress_percent}% to {$validated['progress_percent']}%. Milestone progress can only advance forward.",
+                'code' => 'INVALID_PROGRESS_VALUE',
+            ], 422);
+        }
 
         // Section 7.6 Concurrency Check
         if ($request->has('version') && $assignment->version !== (int)$request->input('version')) {
@@ -293,6 +327,20 @@ class ProjectController extends Controller
                 'Projects',
                 "Updated progress for assignment #{$assignment->id} to {$validated['progress_percent']}%"
             );
+
+            // Notify Project Assigner / Manager
+            $project = DB::table('projects')->where('id', $assignment->project_id)->first();
+            $recipientIds = $this->getProjectNotificationRecipients($assignment, $request);
+            foreach ($recipientIds as $recipientId) {
+                DB::table('user_notifications')->insert([
+                    'user_id' => $recipientId,
+                    'event_key' => 'project.progress_updated',
+                    'title' => "Progress Update: " . ($project ? $project->name : 'Project') . " ({$validated['progress_percent']}%)",
+                    'message' => "{$request->user()->name} updated progress on '" . ($project ? $project->name : 'Project') . "' to {$validated['progress_percent']}%. Note: {$validated['note']}",
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
         });
 
         return response()->json(['message' => 'Progress updated successfully', 'code' => 'SUCCESS']);
@@ -318,6 +366,9 @@ class ProjectController extends Controller
                 abort(404, 'Assignment not found');
             }
             abort_unless(RoleAccess::canUpdateAssignment($request->user(), $assignment), 403);
+            if ($assignment->status !== 'in_progress') {
+                abort(409, 'Extensions can only be requested while a project is in progress.');
+            }
 
             if ($validated['requested_due_date'] <= $assignment->active_due_date) {
                 throw ValidationException::withMessages([
@@ -366,6 +417,20 @@ class ProjectController extends Controller
                 'Projects',
                 "Requested extension for assignment #{$assignment->id} to {$validated['requested_due_date']}"
             );
+
+            // Notify Project Assigner / Manager
+            $project = DB::table('projects')->where('id', $assignment->project_id)->first();
+            $recipientIds = $this->getProjectNotificationRecipients($assignment, $request);
+            foreach ($recipientIds as $recipientId) {
+                DB::table('user_notifications')->insert([
+                    'user_id' => $recipientId,
+                    'event_key' => 'project.extension_requested',
+                    'title' => "Deadline Extension Requested: " . ($project ? $project->name : 'Project'),
+                    'message' => "{$requestedBy} requested a deadline extension for '" . ($project ? $project->name : 'Project') . "' to {$validated['requested_due_date']}. Reason: {$validated['reason']}",
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
 
             return $extensionId;
         });
@@ -419,6 +484,9 @@ class ProjectController extends Controller
                 ->lockForUpdate()
                 ->first();
             abort_unless($assignment && RoleAccess::canReviewAssignment($request->user(), $assignment), 403);
+            if ($assignment->status === 'completed') {
+                return false;
+            }
 
             $decidedAt = now();
             DB::table('project_extension_requests')->where('id', $extension->id)->update([
@@ -433,7 +501,9 @@ class ProjectController extends Controller
 
             if ($decision === 'approved') {
                 $assignment->active_due_date = $extension->requested_due_date;
-                $assignment->status = 'in_progress';
+                if ($assignment->status !== 'under_review') {
+                    $assignment->status = 'in_progress';
+                }
                 $assignment->save();
             }
             AuditLog::record(
@@ -442,6 +512,19 @@ class ProjectController extends Controller
                 'Projects',
                 "Marked extension request #{$extension->id} {$decision}"
             );
+
+            $developerUserId = DB::table('users')->where('employee_id', $assignment->employee_id)->value('id');
+            if ($developerUserId) {
+                $statusText = $decision === 'approved' ? 'approved' : 'rejected';
+                DB::table('user_notifications')->insert([
+                    'user_id' => $developerUserId,
+                    'event_key' => 'project.extension_reviewed',
+                    'title' => "Deadline Extension " . ucfirst($statusText),
+                    'message' => "Your deadline extension request for project was {$statusText} by {$request->user()->name}." . ($decisionNote !== '' ? " Remarks: {$decisionNote}" : ''),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
 
             return true;
         });
@@ -483,6 +566,20 @@ class ProjectController extends Controller
                 'updated_at' => now()
             ]);
             AuditLog::record($request, 'PROJECT_SUBMITTED', 'Projects', "Submitted assignment #{$id} for review");
+
+            // Notify Project Assigner / Manager
+            $project = DB::table('projects')->where('id', $assignment->project_id)->first();
+            $recipientIds = $this->getProjectNotificationRecipients($assignment, $request);
+            foreach ($recipientIds as $recipientId) {
+                DB::table('user_notifications')->insert([
+                    'user_id' => $recipientId,
+                    'event_key' => 'project.submitted',
+                    'title' => "Project Submitted for Review: " . ($project ? $project->name : 'Project'),
+                    'message' => "{$request->user()->name} submitted deliverable for '" . ($project ? $project->name : 'Project') . "' for completion review. Note: {$validated['submission_note']}",
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
 
             return true;
         });
@@ -556,6 +653,19 @@ class ProjectController extends Controller
                 "Marked assignment #{$lockedAssignment->id} completion {$reviewResult}"
             );
 
+            $developerUserId = DB::table('users')->where('employee_id', $lockedAssignment->employee_id)->value('id');
+            if ($developerUserId) {
+                $statusText = $decision === 'accept' ? 'accepted and marked completed' : 'returned for revisions';
+                DB::table('user_notifications')->insert([
+                    'user_id' => $developerUserId,
+                    'event_key' => 'project.completion_reviewed',
+                    'title' => $decision === 'accept' ? 'Project Deliverable Accepted' : 'Project Returned for Revisions',
+                    'message' => "Your project submission was {$statusText} by {$request->user()->name}." . (!empty($validated['remarks']) ? " Remarks: {$validated['remarks']}" : ''),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
             return true;
         });
 
@@ -612,6 +722,18 @@ class ProjectController extends Controller
             ]);
             AuditLog::record($request, 'PROJECT_PENALTY_ASSESSED', 'Projects', "Assessed penalty #{$id}");
 
+            $developerUserId = DB::table('users')->where('employee_id', $assignment->employee_id)->value('id');
+            if ($developerUserId) {
+                DB::table('user_notifications')->insert([
+                    'user_id' => $developerUserId,
+                    'event_key' => 'project.penalty_assessed',
+                    'title' => 'Overdue Notice Assessed',
+                    'message' => "An overdue notice was assessed for project by {$request->user()->name}. Reason: {$validated['reason']}",
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
             return $id;
         });
 
@@ -635,7 +757,18 @@ class ProjectController extends Controller
         abort_unless($penalty->status !== 'waived', 409);
 
         $assignment = DB::table('project_assignments')->where('id', $penalty->assignment_id)->first();
-        abort_unless($assignment && RoleAccess::canManageAssignment($request->user(), $assignment), 403);
+        abort_unless($assignment, 404);
+
+        if ($request->user()->role === 'manager') {
+            abort_if(
+                $request->user()->employee_id && (int) $assignment->employee_id === (int) $request->user()->employee_id,
+                403,
+                'Managers cannot waive their own project penalties.'
+            );
+            abort_unless(RoleAccess::managesEmployee($request->user(), (int) $assignment->employee_id), 403);
+        } else {
+            abort_unless(RoleAccess::canManageAssignment($request->user(), $assignment), 403);
+        }
 
         DB::transaction(function () use ($id, $validated, $request) {
             DB::table('project_penalties')->where('id', $id)->update([
@@ -649,5 +782,44 @@ class ProjectController extends Controller
         });
 
         return response()->json(['message' => 'Project penalty waived']);
+    }
+
+    /**
+     * Identify who should receive notifications when a developer acts on a project.
+     * Recipients include the assigner user and/or reporting manager (or super_admin fallback).
+     */
+    private function getProjectNotificationRecipients(object $assignment, Request $request): array
+    {
+        $recipientIds = [];
+        $currentUserId = $request->user()->id;
+
+        // 1. Assigner user (matched by name from assigned_by)
+        if (!empty($assignment->assigned_by)) {
+            $assignerId = DB::table('users')->where('name', $assignment->assigned_by)->value('id');
+            if ($assignerId && (int)$assignerId !== $currentUserId) {
+                $recipientIds[] = (int)$assignerId;
+            }
+        }
+
+        // 2. Reporting manager of assigned developer
+        $reportingManagerId = DB::table('employees')->where('id', $assignment->employee_id)->value('reporting_manager_id');
+        if ($reportingManagerId) {
+            $managerUserId = DB::table('users')->where('employee_id', $reportingManagerId)->value('id');
+            if ($managerUserId && (int)$managerUserId !== $currentUserId) {
+                $recipientIds[] = (int)$managerUserId;
+            }
+        }
+
+        // 3. Fallback: super_admin users
+        if (empty($recipientIds)) {
+            $superAdminIds = DB::table('users')
+                ->where('role', 'super_admin')
+                ->where('id', '!=', $currentUserId)
+                ->pluck('id')
+                ->all();
+            $recipientIds = array_map('intval', $superAdminIds);
+        }
+
+        return array_values(array_unique($recipientIds));
     }
 }

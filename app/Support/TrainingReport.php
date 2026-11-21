@@ -15,6 +15,8 @@ final class TrainingReport
             ->leftJoin('branches', 'branches.id', '=', 'employees.branch_id')
             ->where('course.status', 'active')
             ->where('course.mandatory', true)
+            ->whereNull('employees.deleted_at')
+            ->whereIn('employees.status', ['active', 'on_notice'])
             ->where('employees.is_demo', false)
             ->when($employeeIds !== null, fn ($query) => $query->whereIn('employees.id', $employeeIds))
             ->selectRaw("COALESCE(branches.id, 0) as branch_id, COALESCE(branches.name, 'Unassigned') as branch_name")

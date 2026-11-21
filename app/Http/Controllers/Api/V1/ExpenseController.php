@@ -179,6 +179,27 @@ class ExpenseController extends Controller
         return response()->json(['data' => $this->loadClaim($id)]);
     }
 
+    public function cancelClaim(Request $request, int $id): JsonResponse
+    {
+        $employeeId = $request->user()->employee_id;
+        abort_unless($employeeId, 403);
+
+        DB::transaction(function () use ($request, $id, $employeeId) {
+            $claim = DB::table('expense_claims')->where('id', $id)->lockForUpdate()->first();
+            abort_if(!$claim, 404);
+            abort_if((int) $claim->employee_id !== (int) $employeeId, 403, 'You can only cancel your own expense claims.');
+            abort_if($claim->status !== 'submitted', 409, 'Only submitted expense claims can be cancelled.');
+
+            DB::table('expense_claims')->where('id', $id)->update([
+                'status' => 'cancelled',
+                'updated_at' => now(),
+            ]);
+            AuditLog::record($request, 'EXPENSE_CLAIM_CANCELLED', 'Expenses', "Cancelled expense claim #{$id}");
+        });
+
+        return response()->json(['data' => $this->loadClaim($id)]);
+    }
+
     public function storeLoanRequest(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -236,6 +257,27 @@ class ExpenseController extends Controller
                 'Expenses',
                 "Reviewed loan request #{$id}: {$validated['decision']}"
             );
+        });
+
+        return response()->json(['data' => $this->loadLoan($id)]);
+    }
+
+    public function cancelLoanRequest(Request $request, int $id): JsonResponse
+    {
+        $employeeId = $request->user()->employee_id;
+        abort_unless($employeeId, 403);
+
+        DB::transaction(function () use ($request, $id, $employeeId) {
+            $loan = DB::table('loan_requests')->where('id', $id)->lockForUpdate()->first();
+            abort_if(!$loan, 404);
+            abort_if((int) $loan->employee_id !== (int) $employeeId, 403, 'You can only cancel your own loan requests.');
+            abort_if($loan->status !== 'submitted', 409, 'Only submitted loan requests can be cancelled.');
+
+            DB::table('loan_requests')->where('id', $id)->update([
+                'status' => 'cancelled',
+                'updated_at' => now(),
+            ]);
+            AuditLog::record($request, 'LOAN_REQUEST_CANCELLED', 'Expenses', "Cancelled loan request #{$id}");
         });
 
         return response()->json(['data' => $this->loadLoan($id)]);

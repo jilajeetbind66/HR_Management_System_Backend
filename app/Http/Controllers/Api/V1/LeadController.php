@@ -247,6 +247,21 @@ class LeadController extends Controller
                 DB::table('lead_assignments')->insert($assignments);
             }
 
+            // Notify assigned employees
+            foreach (array_unique($validated['assigned_employee_ids']) as $empId) {
+                $assignedUserId = DB::table('users')->where('employee_id', $empId)->value('id');
+                if ($assignedUserId && (int)$assignedUserId !== (int)$request->user()->id) {
+                    DB::table('user_notifications')->insert([
+                        'user_id' => $assignedUserId,
+                        'event_key' => 'lead.assigned',
+                        'title' => "New Lead Assigned: {$validated['lead_name']}",
+                        'message' => "You have been assigned to lead '{$validated['lead_name']}' for client '{$validated['client_name']}'.",
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                }
+            }
+
             // Log initial activity note
             DB::table('lead_activities')->insert([
                 'lead_id' => $leadId,
@@ -419,8 +434,8 @@ class LeadController extends Controller
                 $updates['status'] = $validated['status'];
             }
 
-            if (isset($validated['remarks'])) {
-                $updates['remarks'] = trim($validated['remarks']);
+            if (array_key_exists('remarks', $validated)) {
+                $updates['remarks'] = $validated['remarks'] !== null ? trim($validated['remarks']) : null;
             }
 
             if (!empty($validated['mark_follow_up_completed'])) {
@@ -428,7 +443,12 @@ class LeadController extends Controller
                 $updates['follow_up_date'] = null;
             } elseif (isset($validated['follow_up_required'])) {
                 $updates['follow_up_required'] = (bool) $validated['follow_up_required'];
-                $updates['follow_up_date'] = $updates['follow_up_required'] ? ($validated['follow_up_date'] ?? null) : null;
+                if ($updates['follow_up_required'] && empty($validated['follow_up_date'])) {
+                    throw ValidationException::withMessages([
+                        'follow_up_date' => 'A follow-up date is required when follow-up is enabled.',
+                    ]);
+                }
+                $updates['follow_up_date'] = $updates['follow_up_required'] ? $validated['follow_up_date'] : null;
             }
 
             DB::table('leads')->where('id', $id)->update($updates);
@@ -463,6 +483,23 @@ class LeadController extends Controller
                 'Lead Management',
                 "Updated progress for lead '{$lead->lead_name}' (#{$id})"
             );
+
+            // Notify Super Admins if updated by someone else
+            if ($request->user()->role !== 'super_admin') {
+                $superAdminIds = DB::table('users')->where('role', 'super_admin')->pluck('id');
+                $noteText = !empty($notes) ? implode(' | ', $notes) : 'Progress updated';
+                $now = now();
+                foreach ($superAdminIds as $saId) {
+                    DB::table('user_notifications')->insert([
+                        'user_id' => $saId,
+                        'event_key' => 'lead.progress_updated',
+                        'title' => "Lead Update: {$lead->lead_name}",
+                        'message' => "{$request->user()->name} updated lead '{$lead->lead_name}': {$noteText}",
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ]);
+                }
+            }
         });
 
         return response()->json([

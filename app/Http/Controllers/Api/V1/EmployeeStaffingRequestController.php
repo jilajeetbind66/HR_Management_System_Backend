@@ -20,12 +20,15 @@ class EmployeeStaffingRequestController extends Controller
 
         $query = DB::table('employee_staffing_requests')
             ->join('employees as managers', 'employee_staffing_requests.manager_employee_id', '=', 'managers.id')
+            ->leftJoin('branches as manager_branches', 'managers.branch_id', '=', 'manager_branches.id')
             ->leftJoin('employees as assigned', 'employee_staffing_requests.assigned_employee_id', '=', 'assigned.id')
             ->select(
                 'employee_staffing_requests.*',
                 'managers.first_name as manager_first_name',
                 'managers.last_name as manager_last_name',
                 'managers.employee_code as manager_employee_code',
+                'managers.branch_id as manager_branch_id',
+                'manager_branches.name as manager_branch_name',
                 'assigned.first_name as assigned_first_name',
                 'assigned.last_name as assigned_last_name',
                 'assigned.employee_code as assigned_employee_code'
@@ -87,6 +90,23 @@ class EmployeeStaffingRequestController extends Controller
             'Employees',
             "Submitted {$validated['request_type']} staffing request #{$id}"
         );
+
+        // Dispatch in-app notification to Super Admins
+        $managerEmp = DB::table('employees')->where('id', $user->employee_id)->first();
+        $managerName = $managerEmp ? trim($managerEmp->first_name . ' ' . $managerEmp->last_name) : $user->name;
+        $superAdminUserIds = DB::table('users')->where('role', 'super_admin')->where('id', '!=', $user->id)->pluck('id');
+        $now = now();
+        $reqTypeLabel = $validated['request_type'] === 'new_hire' ? 'new hire' : 'team member';
+        foreach ($superAdminUserIds as $saId) {
+            DB::table('user_notifications')->insert([
+                'user_id' => $saId,
+                'event_key' => 'staffing.requested',
+                'title' => "Staffing Request: " . trim($validated['designation']),
+                'message' => "{$managerName} requested a {$reqTypeLabel} for {$validated['department']}. Justification: {$validated['justification']}",
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+        }
 
         return response()->json([
             'data' => DB::table('employee_staffing_requests')->where('id', $id)->first(),
@@ -174,6 +194,21 @@ class EmployeeStaffingRequestController extends Controller
                 "Marked staffing request #{$requestId} {$validated['decision']}"
                     . ($assignedEmployeeId ? "; assigned employee #{$assignedEmployeeId}" : '')
             );
+
+            // Dispatch notification to requesting Manager
+            $managerUserId = DB::table('users')->where('employee_id', $staffingRequest->manager_employee_id)->value('id');
+            if ($managerUserId && (int)$managerUserId !== (int)$user->id) {
+                $decisionLabel = ucfirst($validated['decision']);
+                $note = !empty($validated['review_note']) ? " Note: {$validated['review_note']}" : '';
+                DB::table('user_notifications')->insert([
+                    'user_id' => $managerUserId,
+                    'event_key' => 'staffing.reviewed',
+                    'title' => "Staffing Request {$decisionLabel}: {$staffingRequest->designation}",
+                    'message' => "Your staffing request #{$requestId} for {$staffingRequest->designation} ({$staffingRequest->department}) was {$validated['decision']} by {$user->name}.{$note}",
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
 
             return DB::table('employee_staffing_requests')->where('id', $requestId)->first();
         });

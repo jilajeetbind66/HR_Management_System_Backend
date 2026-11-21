@@ -60,6 +60,10 @@ Route::prefix('v1')->group(function () {
         Route::post('/auth/logout', [AuthController::class, 'logout']);
         Route::post('/auth/change-password', [AuthController::class, 'changePassword']);
         Route::get('/notifications', [NotificationController::class, 'index']);
+        Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
+        Route::delete('/notifications/clear-all', [NotificationController::class, 'clearAll']);
+        Route::delete('/notifications/{id}', [NotificationController::class, 'destroy'])
+            ->whereNumber('id');
         Route::post('/notifications/{id}/read', [NotificationController::class, 'markRead'])
             ->whereNumber('id');
 
@@ -81,6 +85,20 @@ Route::prefix('v1')->group(function () {
             Route::get('/departments', [OrganizationController::class, 'departments']);
             Route::get('/designations', [OrganizationController::class, 'designations']);
             Route::get('/holidays', [OrganizationController::class, 'holidays']);
+        });
+        Route::prefix('organization')->middleware('role:super_admin')->group(function () {
+            Route::put('/company', [OrganizationController::class, 'updateCompany']);
+            Route::post('/branches', [OrganizationController::class, 'storeBranch']);
+            Route::patch('/branches/{id}', [OrganizationController::class, 'updateBranch'])->whereNumber('id');
+            Route::post('/departments', [OrganizationController::class, 'storeDepartment']);
+            Route::patch('/departments/{id}', [OrganizationController::class, 'updateDepartment'])->whereNumber('id');
+            Route::delete('/departments/{id}', [OrganizationController::class, 'destroyDepartment'])->whereNumber('id');
+            Route::post('/designations', [OrganizationController::class, 'storeDesignation']);
+            Route::patch('/designations/{id}', [OrganizationController::class, 'updateDesignation'])->whereNumber('id');
+            Route::delete('/designations/{id}', [OrganizationController::class, 'destroyDesignation'])->whereNumber('id');
+            Route::post('/holidays', [OrganizationController::class, 'storeHoliday']);
+            Route::patch('/holidays/{id}', [OrganizationController::class, 'updateHoliday'])->whereNumber('id');
+            Route::delete('/holidays/{id}', [OrganizationController::class, 'destroyHoliday'])->whereNumber('id');
         });
 
         // M03 Employees
@@ -104,6 +122,9 @@ Route::prefix('v1')->group(function () {
         Route::patch('/employees/{employeeId}/compensation', [EmployeeController::class, 'updateCompensation'])
             ->whereNumber('employeeId')
             ->middleware('role:super_admin,hr_admin');
+        Route::patch('/employees/{employeeId}/statutory', [EmployeeController::class, 'updateStatutory'])
+            ->whereNumber('employeeId')
+            ->middleware('role:super_admin');
         Route::patch('/employees/{employeeId}/lead-access', [EmployeeController::class, 'updateLeadAccess'])
             ->whereNumber('employeeId')
             ->middleware('role:super_admin,hr_admin');
@@ -175,10 +196,14 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:manager,super_admin');
         Route::post('/expense-claims/{id}/pay', [ExpenseController::class, 'markClaimPaid'])
             ->middleware('role:super_admin');
+        Route::post('/expense-claims/{id}/cancel', [ExpenseController::class, 'cancelClaim'])
+            ->middleware('role:employee,manager,super_admin');
         Route::post('/loan-requests', [ExpenseController::class, 'storeLoanRequest'])
             ->middleware('role:employee,manager,super_admin');
         Route::post('/loan-requests/{id}/review', [ExpenseController::class, 'reviewLoanRequest'])
             ->middleware('role:manager,super_admin');
+        Route::post('/loan-requests/{id}/cancel', [ExpenseController::class, 'cancelLoanRequest'])
+            ->middleware('role:employee,manager,super_admin');
 
         // M16 Documents, Policies, and HR Letter Drafts
         Route::get('/documents/policies', [DocumentsController::class, 'policies'])
@@ -212,6 +237,10 @@ Route::prefix('v1')->group(function () {
         Route::post('/attendance/regularizations', [AttendanceController::class, 'requestRegularization'])
             ->middleware('role:employee,manager,hr_admin,hr_executive,super_admin');
         Route::post('/attendance/regularizations/{id}/review', [AttendanceController::class, 'reviewRegularization'])
+            ->middleware('role:manager,hr_admin,hr_executive,super_admin');
+        Route::get('/attendance/shift-settings', [AttendanceController::class, 'getShiftSettings'])
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
+        Route::put('/attendance/shift-settings', [AttendanceController::class, 'updateShiftSettings'])
             ->middleware('role:manager,hr_admin,hr_executive,super_admin');
 
         // M06 Leaves
@@ -265,6 +294,10 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:super_admin,payroll_admin');
         Route::patch('/payroll/runs/{runId}/payslips/{payslipId}/deductions', [PayrollController::class, 'updatePayslipDeductions'])
             ->middleware('role:super_admin,payroll_admin');
+        Route::post('/payroll/runs/{runId}/payslips/{payslipId}/pay', [PayrollController::class, 'markIndividualPaid'])
+            ->middleware('role:super_admin');
+        Route::patch('/payroll/runs/{runId}/payslips/{payslipId}/adjustments', [PayrollController::class, 'updatePayslipAdjustments'])
+            ->middleware('role:super_admin');
 
         Route::get('/helpdesk/tickets', [HelpdeskController::class, 'index'])
             ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,super_admin');
@@ -337,6 +370,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/platform/audit-logs', [PlatformController::class, 'auditLogs'])
             ->middleware('role:super_admin,auditor');
         Route::get('/platform/scheduler-runs', [PlatformController::class, 'schedulerRuns'])
+            ->middleware('role:super_admin,auditor');
+        Route::get('/platform/sequences', [PlatformController::class, 'sequences'])
             ->middleware('role:super_admin,auditor');
 
         // M16 Reports & Analytics

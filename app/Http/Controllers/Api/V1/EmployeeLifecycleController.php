@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class EmployeeLifecycleController extends Controller
@@ -43,7 +44,11 @@ class EmployeeLifecycleController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'employee_id' => 'required|integer|exists:employees,id',
+            'employee_id' => [
+                'required',
+                'integer',
+                Rule::exists('employees', 'id')->whereNull('deleted_at'),
+            ],
             'case_type' => 'required|in:onboarding,offboarding',
             'notice_date' => 'nullable|required_if:case_type,offboarding|date_format:Y-m-d|before_or_equal:effective_date',
             'effective_date' => 'required|date_format:Y-m-d',

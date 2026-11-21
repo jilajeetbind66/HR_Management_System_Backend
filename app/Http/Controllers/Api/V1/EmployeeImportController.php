@@ -251,6 +251,12 @@ class EmployeeImportController extends Controller
             ], $row);
             $row['email'] = strtolower($row['email']);
             $validationRow = $row;
+            if (isset($validationRow['pf_applicable']) && is_string($validationRow['pf_applicable'])) {
+                $validationRow['pf_applicable'] = strtolower(trim($validationRow['pf_applicable']));
+            }
+            if (isset($validationRow['esi_applicable']) && is_string($validationRow['esi_applicable'])) {
+                $validationRow['esi_applicable'] = strtolower(trim($validationRow['esi_applicable']));
+            }
             foreach ([
                 'role', 'phone', 'gender', 'date_of_birth', 'department_id', 'designation_id',
                 'employment_type', 'pan', 'uan', 'pf_applicable', 'esi_applicable', 'pt_state',
@@ -315,6 +321,21 @@ class EmployeeImportController extends Controller
                 && is_numeric($row['basic_monthly']) && is_numeric($row['gross_monthly'])
                 && (float) $row['basic_monthly'] > (float) $row['gross_monthly']) {
                 $errors['basic_monthly'][] = 'Basic monthly salary cannot exceed gross monthly salary.';
+            }
+
+            if (!isset($errors['department_id']) && !isset($errors['designation_id']) && !isset($errors['department']) && !isset($errors['designation'])) {
+                try {
+                    EmployeeOrganization::resolve(
+                        $validationRow['department_id'] !== null ? (int) $validationRow['department_id'] : null,
+                        $validationRow['designation_id'] !== null ? (int) $validationRow['designation_id'] : null,
+                        $validationRow['department'],
+                        $validationRow['designation']
+                    );
+                } catch (ValidationException $exception) {
+                    foreach ($exception->errors() as $field => $messages) {
+                        $errors[$field] = array_merge($errors[$field] ?? [], $messages);
+                    }
+                }
             }
 
             $rows[] = ['line' => $line, 'data' => $row, 'errors' => $errors, 'warnings' => $rowWarnings];

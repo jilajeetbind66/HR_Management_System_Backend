@@ -292,6 +292,10 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:super_admin,payroll_admin');
         Route::patch('/payroll/runs/{runId}/payslips/{payslipId}/deductions', [PayrollController::class, 'updatePayslipDeductions'])
             ->middleware('role:super_admin,payroll_admin');
+        Route::post('/payroll/runs/{runId}/payslips/{payslipId}/pay', [PayrollController::class, 'markIndividualPaid'])
+            ->middleware('role:super_admin');
+        Route::patch('/payroll/runs/{runId}/payslips/{payslipId}/adjustments', [PayrollController::class, 'updatePayslipAdjustments'])
+            ->middleware('role:super_admin');
 
         Route::get('/helpdesk/tickets', [HelpdeskController::class, 'index'])
             ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,super_admin');

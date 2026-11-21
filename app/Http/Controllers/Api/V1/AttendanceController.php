@@ -423,7 +423,7 @@ class AttendanceController extends Controller
     public function updateShiftSettings(Request $request): JsonResponse
     {
         $user = $request->user();
-        abort_unless(in_array($user->role, ['super_admin', 'manager', 'hr_admin']), 403, 'Unauthorized.');
+        abort_unless($user->role === 'super_admin', 403, 'Unauthorized. Only Super Admin can modify shift policies.');
 
         $validated = $request->validate([
             'shift_name' => 'sometimes|string|max:100',

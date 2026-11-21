@@ -29,7 +29,10 @@ class PayrollController extends Controller
             ->join('payroll_runs', 'payroll_runs.id', '=', 'payslips.payroll_run_id')
             ->join('employees', 'employees.id', '=', 'payslips.employee_id')
             ->where('payslips.employee_id', $employeeId)
-            ->whereIn('payroll_runs.status', ['published', 'locked'])
+            ->where(function ($query) {
+                $query->whereIn('payroll_runs.status', ['published', 'locked'])
+                    ->orWhere('payslips.payment_status', 'paid');
+            })
             ->where('payslips.deductions_confirmed', true)
             ->select([
                 'payslips.id',

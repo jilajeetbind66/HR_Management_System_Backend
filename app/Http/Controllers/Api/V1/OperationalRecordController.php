@@ -140,7 +140,7 @@ class OperationalRecordController extends Controller
     public function updateCandidateStage(Request $request, int $id): JsonResponse
     {
         $validated = $request->validate([
-            'stage' => 'required|in:Applied,Screening,Interview,Offered',
+            'stage' => 'required|in:Applied,Screening,Interview,Offered,Rejected',
         ]);
 
         DB::transaction(function () use ($id, $validated, $request) {

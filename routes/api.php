@@ -138,11 +138,13 @@ Route::prefix('v1')->group(function () {
 
         // M10 Employee Lifecycle & Clearances
         Route::get('/lifecycle/cases', [EmployeeLifecycleController::class, 'index'])
-            ->middleware('role:super_admin,hr_admin,hr_executive');
+            ->middleware('role:super_admin,hr_admin,hr_executive,manager');
         Route::post('/lifecycle/cases', [EmployeeLifecycleController::class, 'store'])
-            ->middleware('role:super_admin,hr_admin');
+            ->middleware('role:super_admin,hr_admin,hr_executive');
         Route::patch('/lifecycle/tasks/{id}', [EmployeeLifecycleController::class, 'updateTask'])
-            ->middleware('role:super_admin,hr_admin');
+            ->middleware('role:super_admin,hr_admin,hr_executive,manager');
+        Route::post('/lifecycle/cases/{id}/relieve', [EmployeeLifecycleController::class, 'relieveCase'])
+            ->middleware('role:super_admin');
 
         // M13 Training & Certification
         Route::get('/training', [TrainingController::class, 'index'])

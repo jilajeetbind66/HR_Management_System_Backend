@@ -111,6 +111,13 @@ class EmployeeLifecycleController extends Controller
                 ]);
             }
 
+            if ($validated['case_type'] === 'offboarding') {
+                DB::table('employees')
+                    ->where('id', $validated['employee_id'])
+                    ->where('status', 'active')
+                    ->update(['status' => 'on_notice', 'updated_at' => $now]);
+            }
+
             $employeeCode = DB::table('employees')
                 ->where('id', $validated['employee_id'])
                 ->value('employee_code');
@@ -187,6 +194,55 @@ class EmployeeLifecycleController extends Controller
         });
 
         return response()->json(['data' => $this->loadCase($caseId)]);
+    }
+
+    public function relieveCase(Request $request, int $id): JsonResponse
+    {
+        $case = DB::table('employee_lifecycle_cases')
+            ->where('id', $id)
+            ->first();
+
+        abort_unless($case, 404, 'Lifecycle case not found.');
+        abort_unless($case->case_type === 'offboarding', 400, 'Only offboarding cases can be relieved.');
+
+        $hasOpenTasks = DB::table('employee_lifecycle_tasks')
+            ->where('lifecycle_case_id', $case->id)
+            ->whereNotIn('status', ['completed', 'waived'])
+            ->exists();
+
+        if ($hasOpenTasks) {
+            throw ValidationException::withMessages([
+                'status' => 'All departmental clearances (Manager, IT, Finance, Admin, HR) must be completed or waived before final relieving.',
+            ]);
+        }
+
+        DB::transaction(function () use ($case, $request, $id) {
+            DB::table('employee_lifecycle_cases')
+                ->where('id', $id)
+                ->update([
+                    'status' => 'completed',
+                    'updated_at' => now(),
+                ]);
+
+            DB::table('employees')
+                ->where('id', $case->employee_id)
+                ->update([
+                    'status' => 'inactive',
+                    'updated_at' => now(),
+                ]);
+
+            AuditLog::record(
+                $request,
+                'EMPLOYEE_FINAL_RELIEVED',
+                'Employee Lifecycle',
+                "Super Admin approved final exit sign-off and relieved employee #{$case->employee_id}"
+            );
+        });
+
+        return response()->json([
+            'message' => 'Employee officially relieved. Employment status set to inactive.',
+            'data' => $this->loadCase($id)
+        ]);
     }
 
     private function loadCase(int $id): object

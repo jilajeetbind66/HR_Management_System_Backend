@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Support\AuditLog;
 use App\Support\RoleAccess;
+use App\Support\UserNotification;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -309,6 +310,14 @@ class PerformanceController extends Controller
                 'Performance',
                 'Submitted '.count($editableIds)." objectives for Q{$cycle->quarter} {$cycle->year}"
             );
+
+            $empName = UserNotification::employeeName((int) $employeeId);
+            UserNotification::sendToManagerOf(
+                (int) $employeeId,
+                'performance.submitted',
+                "Quarterly Goals Submitted: {$empName}",
+                "{$empName} submitted objectives for Q{$cycle->quarter} {$cycle->year} for your review and approval."
+            );
         });
 
         return response()->json(['data' => $this->loadCycleObjectives($cycleId, $employeeId)]);
@@ -352,6 +361,15 @@ class PerformanceController extends Controller
                 'PERFORMANCE_OBJECTIVE_REVIEWED',
                 'Performance',
                 "Reviewed objective #{$objectiveId}: {$validated['decision']}"
+            );
+
+            $decisionText = $validated['decision'] === 'approved' ? 'Approved' : 'Returned';
+            $noteText = !empty($validated['manager_note']) ? " Note: {$validated['manager_note']}" : '';
+            UserNotification::sendToEmployee(
+                (int) $objective->employee_id,
+                'performance.reviewed',
+                "Performance Goal {$decisionText}",
+                "Your objective '{$objective->title}' was {$validated['decision']} by {$request->user()->name}.{$noteText}"
             );
         });
 
@@ -423,6 +441,14 @@ class PerformanceController extends Controller
                 'updated_at' => now(),
             ]);
             AuditLog::record($request, 'PERFORMANCE_SELF_REVIEWED', 'Performance', "Submitted self-rating for objective #{$objectiveId}");
+
+            $empName = UserNotification::employeeName((int) $employeeId);
+            UserNotification::sendToManagerOf(
+                (int) $employeeId,
+                'performance.self_reviewed',
+                "Self-Review Submitted: {$empName}",
+                "{$empName} submitted self-appraisal rating ({$validated['rating']}/5) for objective '{$objective->title}'."
+            );
         });
 
         return response()->json(['data' => $this->loadObjective($objectiveId)]);
@@ -453,6 +479,13 @@ class PerformanceController extends Controller
                 'updated_at' => now(),
             ]);
             AuditLog::record($request, 'PERFORMANCE_MANAGER_REVIEWED', 'Performance', "Submitted manager rating for objective #{$objectiveId}");
+
+            UserNotification::sendToEmployee(
+                (int) $objective->employee_id,
+                'performance.manager_reviewed',
+                'Performance Appraisal Completed',
+                "Your manager {$request->user()->name} submitted your appraisal rating ({$validated['rating']}/5) for objective '{$objective->title}'."
+            );
         });
 
         return response()->json(['data' => $this->loadObjective($objectiveId)]);

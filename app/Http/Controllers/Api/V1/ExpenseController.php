@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Support\AuditLog;
 use App\Support\RoleAccess;
+use App\Support\UserNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -105,6 +106,22 @@ class ExpenseController extends Controller
             ]);
             AuditLog::record($request, 'EXPENSE_CLAIM_SUBMITTED', 'Expenses', "Submitted expense claim #{$id}");
 
+            $empName = UserNotification::employeeName((int) $employeeId);
+            $amountFormatted = number_format((float) $validated['amount'], 2);
+            UserNotification::sendToManagerOf(
+                (int) $employeeId,
+                'expense.submitted',
+                "Expense Claim: {$empName}",
+                "{$empName} submitted an expense claim of ₹{$amountFormatted} ({$validated['category']}) for your approval."
+            );
+            UserNotification::sendToRole(
+                'payroll_admin',
+                'expense.submitted',
+                "Expense Claim: {$empName}",
+                "{$empName} submitted an expense claim of ₹{$amountFormatted} ({$validated['category']}).",
+                $request->user()->id
+            );
+
             return $id;
         });
 
@@ -155,6 +172,16 @@ class ExpenseController extends Controller
                 'Expenses',
                 "Reviewed expense claim #{$id}: {$validated['decision']}"
             );
+
+            $statusText = ucfirst($validated['decision']);
+            $amountFormatted = number_format((float) $claim->amount, 2);
+            $noteText = !empty($validated['decision_note']) ? " Note: {$validated['decision_note']}" : '';
+            UserNotification::sendToEmployee(
+                (int) $claim->employee_id,
+                'expense.reviewed',
+                "Expense Claim {$statusText}",
+                "Your expense claim #{$id} for ₹{$amountFormatted} was {$validated['decision']} by {$request->user()->name}.{$noteText}"
+            );
         });
 
         return response()->json(['data' => $this->loadClaim($id)]);
@@ -174,6 +201,14 @@ class ExpenseController extends Controller
                 'updated_at' => now(),
             ]);
             AuditLog::record($request, 'EXPENSE_CLAIM_MARKED_PAID', 'Expenses', "Marked expense claim #{$id} as paid");
+
+            $amountFormatted = number_format((float) $claim->amount, 2);
+            UserNotification::sendToEmployee(
+                (int) $claim->employee_id,
+                'expense.paid',
+                'Expense Claim Reimbursed',
+                "Your expense claim #{$id} for ₹{$amountFormatted} has been marked as paid and processed for reimbursement."
+            );
         });
 
         return response()->json(['data' => $this->loadClaim($id)]);

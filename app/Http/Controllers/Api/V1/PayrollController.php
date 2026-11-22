@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Support\AuditLog;
 use App\Support\LeaveDayCalculator;
 use App\Support\PayrollComponentCalculator;
+use App\Support\UserNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -433,6 +434,15 @@ class PayrollController extends Controller
             return $this->duplicateRunResponse();
         }
 
+        $formattedTotalNet = number_format((float) ($run->net_payout_inr ?? 0), 2);
+        UserNotification::sendToRole(
+            'super_admin',
+            'payroll.generated',
+            "Payroll Generated: {$monthName}",
+            "Payroll run #{$run->id} generated for {$run->total_employees} employees totaling ₹{$formattedTotalNet}. Ready for audit and disbursal approval.",
+            $request->user()->id
+        );
+
         return response()->json(['data' => $run], 201);
     }
 
@@ -771,6 +781,28 @@ class PayrollController extends Controller
                 'updated_at' => now(),
             ]);
             AuditLog::record($request, 'PAYROLL_PUBLISHED', 'Payroll', "Published payroll run #{$id}");
+
+            $payslipEmployeeIds = DB::table('payslips')
+                ->where('payroll_run_id', $id)
+                ->pluck('employee_id')
+                ->all();
+
+            foreach ($payslipEmployeeIds as $pEmpId) {
+                UserNotification::sendToEmployee(
+                    (int) $pEmpId,
+                    'payroll.payslip_published',
+                    "Payslip Available: {$run->month_name} {$run->period_year}",
+                    "Your payslip for {$run->month_name} {$run->period_year} has been published and is available in My Payslips."
+                );
+            }
+
+            UserNotification::sendToRole(
+                'super_admin',
+                'payroll.published',
+                "Payroll Disbursal Approved: {$run->month_name} {$run->period_year}",
+                "Payroll run #{$id} published by {$request->user()->name}. Payslips are now visible to employees.",
+                $request->user()->id
+            );
         });
 
         return response()->json([

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Support\AuditLog;
+use App\Support\UserNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -117,6 +118,21 @@ class EmployeeLifecycleController extends Controller
                     ->where('id', $validated['employee_id'])
                     ->where('status', 'active')
                     ->update(['status' => 'on_notice', 'updated_at' => $now]);
+
+                $empName = UserNotification::employeeName((int) $validated['employee_id']);
+                UserNotification::sendToManagerOf(
+                    (int) $validated['employee_id'],
+                    'lifecycle.resignation',
+                    "Exit Case Initiated: {$empName}",
+                    "An exit/offboarding case has been created for {$empName}. Notice date: {$validated['notice_date']}, Effective: {$validated['effective_date']}."
+                );
+                UserNotification::sendToRole(
+                    'hr_admin',
+                    'lifecycle.resignation',
+                    "Exit Case Initiated: {$empName}",
+                    "An exit/offboarding case has been created for {$empName} (effective: {$validated['effective_date']}).",
+                    $request->user()->id
+                );
             }
 
             $employeeCode = DB::table('employees')
@@ -184,6 +200,17 @@ class EmployeeLifecycleController extends Controller
                     ->update(['status' => 'completed', 'updated_at' => now()]);
             }
 
+            if (!$hasOpenTasks && $case->case_type === 'offboarding') {
+                $empName = UserNotification::employeeName((int) $case->employee_id);
+                UserNotification::sendToRole(
+                    'super_admin',
+                    'lifecycle.relieving_ready',
+                    "Exit Relieving Ready: {$empName}",
+                    "All 5 departmental clearances have been signed off for {$empName}. Ready for Super Admin final relieving sign-off.",
+                    $request->user()->id
+                );
+            }
+
             AuditLog::record(
                 $request,
                 'LIFECYCLE_TASK_UPDATED',
@@ -237,6 +264,28 @@ class EmployeeLifecycleController extends Controller
                 'EMPLOYEE_FINAL_RELIEVED',
                 'Employee Lifecycle',
                 "Super Admin approved final exit sign-off and relieved employee #{$case->employee_id}"
+            );
+
+            $empName = UserNotification::employeeName((int) $case->employee_id);
+            UserNotification::sendToEmployee(
+                (int) $case->employee_id,
+                'lifecycle.relieved',
+                'Exit Clearances & Relieving Approved',
+                'Your final exit clearances have been signed off by Super Admin and your relieving has been officially processed.'
+            );
+            UserNotification::sendToRole(
+                'hr_admin',
+                'lifecycle.relieved',
+                "Employee Officially Relieved: {$empName}",
+                "{$empName} has been officially relieved by Super Admin.",
+                $request->user()->id
+            );
+            UserNotification::sendToRole(
+                'payroll_admin',
+                'lifecycle.relieved',
+                "Full & Final Settlement Pending: {$empName}",
+                "{$empName} has been relieved. FnF dues and settlement can now be finalized.",
+                $request->user()->id
             );
         });
 

@@ -77,7 +77,7 @@ Route::prefix('v1')->group(function () {
 
     Route::middleware('auth:sanctum')->group(function () {
         // M02 Organization
-        Route::prefix('organization')->middleware('role:super_admin,hr_admin,hr_executive,manager,auditor,recruiter,employee')->group(function () {
+        Route::prefix('organization')->middleware('role:super_admin,hr_admin,hr_executive,manager,auditor,recruiter,employee,payroll_admin')->group(function () {
             Route::get('/company', [OrganizationController::class, 'company']);
             Route::get('/branches', [OrganizationController::class, 'branches']);
             Route::post('/branches', [OrganizationController::class, 'storeBranch'])
@@ -302,21 +302,21 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:super_admin');
 
         Route::get('/helpdesk/tickets', [HelpdeskController::class, 'index'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::post('/helpdesk/tickets', [HelpdeskController::class, 'store'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::get('/helpdesk/tickets/{ticketId}', [HelpdeskController::class, 'show'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::post('/helpdesk/tickets/{ticketId}/messages', [HelpdeskController::class, 'addMessage'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::patch('/helpdesk/tickets/{ticketId}/status', [HelpdeskController::class, 'updateStatus'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::get('/announcements', [AnnouncementsController::class, 'index'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::post('/announcements', [AnnouncementsController::class, 'store'])
             ->middleware('role:super_admin,hr_admin');
         Route::post('/announcements/{announcementId}/read', [AnnouncementsController::class, 'markRead'])
-            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,super_admin');
+            ->middleware('role:employee,manager,hr_admin,hr_executive,recruiter,payroll_admin,auditor,super_admin');
         Route::get('/assets', [AssetsController::class, 'index'])
             ->middleware('role:super_admin');
         Route::post('/assets', [AssetsController::class, 'store'])

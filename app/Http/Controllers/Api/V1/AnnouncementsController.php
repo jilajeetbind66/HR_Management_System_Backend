@@ -52,19 +52,55 @@ class AnnouncementsController extends Controller
         }
 
         $announcementId = DB::transaction(function () use ($validated, $request) {
+            $now = now();
             $id = DB::table('announcements')->insertGetId([
                 ...$validated,
                 'published_by' => $request->user()->name,
-                'read_count' => 0,
-                'created_at' => now(),
-                'updated_at' => now(),
+                'read_count' => 1,
+                'created_at' => $now,
+                'updated_at' => $now,
             ]);
+
+            // Mark the publisher as read immediately
+            DB::table('announcement_reads')->insert([
+                'announcement_id' => $id,
+                'user_id' => $request->user()->id,
+                'read_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ]);
+
             AuditLog::record(
                 $request,
                 'ANNOUNCEMENT_PUBLISHED',
                 'Announcements',
                 "Published announcement: {$validated['title']}"
             );
+
+            // Send notification to all audience members
+            $usersQuery = DB::table('users')->where('id', '!=', $request->user()->id);
+            if ($validated['target'] !== 'All Company') {
+                $branchId = DB::table('branches')->where('name', $validated['target'])->value('id');
+                if ($branchId) {
+                    $empIds = DB::table('employees')->where('branch_id', $branchId)->pluck('id');
+                    $usersQuery->whereIn('employee_id', $empIds);
+                }
+            }
+            $targetUserIds = $usersQuery->pluck('id');
+            $notifications = [];
+            foreach ($targetUserIds as $uId) {
+                $notifications[] = [
+                    'user_id' => $uId,
+                    'event_key' => 'announcement.published',
+                    'title' => 'New Company Announcement',
+                    'message' => "{$request->user()->name}: {$validated['title']}",
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+            if (!empty($notifications)) {
+                DB::table('user_notifications')->insert($notifications);
+            }
 
             return $id;
         });

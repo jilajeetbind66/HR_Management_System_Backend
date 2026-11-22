@@ -23,6 +23,7 @@ class EmployeeLifecycleController extends Controller
                 'employees.employee_code',
                 'employees.first_name',
                 'employees.last_name',
+                'employees.status as employee_status',
                 'creators.name as created_by_name'
             )
             ->orderByDesc('employee_lifecycle_cases.id')
@@ -177,7 +178,7 @@ class EmployeeLifecycleController extends Controller
                 ->whereNotIn('status', ['completed', 'waived'])
                 ->exists();
 
-            if (!$hasOpenTasks) {
+            if (!$hasOpenTasks && $case->case_type === 'onboarding') {
                 DB::table('employee_lifecycle_cases')
                     ->where('id', $case->id)
                     ->update(['status' => 'completed', 'updated_at' => now()]);
@@ -255,6 +256,7 @@ class EmployeeLifecycleController extends Controller
                 'employees.employee_code',
                 'employees.first_name',
                 'employees.last_name',
+                'employees.status as employee_status',
                 'creators.name as created_by_name'
             )
             ->where('employee_lifecycle_cases.id', $id)

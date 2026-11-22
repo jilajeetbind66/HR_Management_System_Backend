@@ -51,6 +51,7 @@ class PerformanceController extends Controller
             'employees.employee_code',
             'employees.first_name',
             'employees.last_name',
+            'employees.reporting_manager_id',
             'reviewers.name as reviewed_by_name',
             'raters.name as manager_rated_by_name',
         ]);
@@ -589,6 +590,7 @@ class PerformanceController extends Controller
                 'employees.employee_code',
                 'employees.first_name',
                 'employees.last_name',
+                'employees.reporting_manager_id',
                 'reviewers.name as reviewed_by_name',
                 'raters.name as manager_rated_by_name',
             ]);

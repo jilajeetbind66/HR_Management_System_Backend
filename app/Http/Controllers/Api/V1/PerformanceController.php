@@ -538,7 +538,6 @@ class PerformanceController extends Controller
         $cycle = DB::table('performance_cycles')->where('id', $objective->cycle_id)->first();
         abort_unless($cycle, 404, 'Performance cycle not found.');
         abort_if($cycle->status !== 'open', 409, 'This performance cycle is closed.');
-        abort_if($cycle->ends_on >= Carbon::today()->toDateString(), 409, 'Ratings open after the quarter end date.');
     }
 
     private function activeEmployeeId(Request $request): int

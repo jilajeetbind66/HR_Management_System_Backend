@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Support\AuditLog;
 use App\Support\RoleAccess;
+use App\Support\UserNotification;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -58,8 +59,9 @@ class HelpdeskController extends Controller
         ][$validated['category']];
 
         $ticketId = DB::transaction(function () use ($request, $validated, $slaHours, $assignedTeam) {
+            $ticketCode = 'HD-'.Str::upper(Str::random(10));
             $id = DB::table('helpdesk_tickets')->insertGetId([
-                'ticket_code' => 'HD-'.Str::upper(Str::random(10)),
+                'ticket_code' => $ticketCode,
                 'title' => $validated['title'],
                 'description' => $validated['description'] ?? null,
                 'category' => $validated['category'],
@@ -74,6 +76,11 @@ class HelpdeskController extends Controller
                 'updated_at' => now(),
             ]);
             AuditLog::record($request, 'TICKET_CREATED', 'Helpdesk', "Created ticket #{$id}");
+
+            UserNotification::sendToRole('super_admin', 'helpdesk.created', "New {$validated['category']} Ticket ({$validated['priority']})", "{$request->user()->name} raised ticket {$ticketCode}: {$validated['title']}", $request->user()->id);
+            if ($validated['category'] === 'HR Query') {
+                UserNotification::sendToRole('hr_admin', 'helpdesk.created', "New HR Query Ticket ({$validated['priority']})", "{$request->user()->name} raised ticket {$ticketCode}: {$validated['title']}", $request->user()->id);
+            }
 
             return $id;
         });
@@ -96,6 +103,23 @@ class HelpdeskController extends Controller
                 'updated_at' => now(),
             ]);
             AuditLog::record($request, 'TICKET_MESSAGE_ADDED', 'Helpdesk', "Added a reply to ticket #{$ticketId}");
+
+            if ((int) $ticket->created_by_user_id !== (int) $request->user()->id) {
+                UserNotification::send(
+                    (int) $ticket->created_by_user_id,
+                    'helpdesk.replied',
+                    "Ticket Reply: {$ticket->ticket_code}",
+                    "{$request->user()->name} replied: " . Str::limit($validated['body'], 60)
+                );
+            } else {
+                UserNotification::sendToRole(
+                    'super_admin',
+                    'helpdesk.replied',
+                    "Ticket Reply: {$ticket->ticket_code}",
+                    "{$request->user()->name} replied to ticket {$ticket->ticket_code}",
+                    $request->user()->id
+                );
+            }
         });
 
         return response()->json(['data' => $this->loadTicket($request, $ticketId, true)]);
@@ -152,6 +176,15 @@ class HelpdeskController extends Controller
                 'Helpdesk',
                 "Updated ticket #{$ticketId} status to {$status}"
             );
+
+            if ((int) $ticket->created_by_user_id !== (int) $request->user()->id) {
+                UserNotification::send(
+                    (int) $ticket->created_by_user_id,
+                    'helpdesk.status_updated',
+                    "Ticket Status: {$status}",
+                    "Your ticket {$ticket->ticket_code} status has been updated to {$status}."
+                );
+            }
         });
 
         return response()->json(['data' => $this->loadTicket($request, $ticketId, true)]);

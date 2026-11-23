@@ -3,12 +3,15 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Mail\PasswordResetMail;
 use App\Models\User;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
 use App\Support\AuditLog;
@@ -93,13 +96,170 @@ class AuthController extends Controller
         }
 
         $user->tokens()->delete();
-        $token = $user->createToken('hrms-web', ['*'], now()->addHours(8))->plainTextToken;
+        $token = $user->createToken('hrms-web', ['*'], now()->addHours(12))->plainTextToken;
 
         return response()->json([
             'data' => [
                 'token' => $token,
                 'user' => $this->userPayload($user),
             ],
+        ]);
+    }
+
+    public function forgotPassword(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => ['required', 'string', 'max:255'],
+        ]);
+
+        $identifier = trim($validated['email']);
+        $user = User::where('email', strtolower($identifier))->first();
+
+        if (!$user) {
+            $employee = DB::table('employees')
+                ->where(function ($query) use ($identifier) {
+                    $query->where('employee_code', strtoupper($identifier))
+                        ->orWhere('email', strtolower($identifier));
+                })
+                ->whereNull('deleted_at')
+                ->first();
+
+            if ($employee) {
+                $user = User::where('employee_id', $employee->id)->orWhere('email', strtolower($employee->email))->first();
+            }
+        }
+
+        if (
+            $user?->employee_id
+            && DB::table('employees')
+                ->where('id', $user->employee_id)
+                ->where(function ($query) {
+                    $query->whereNotNull('deleted_at')
+                        ->orWhereIn('status', ['inactive', 'terminated']);
+                })
+                ->exists()
+        ) {
+            return response()->json([
+                'message' => 'This employee account is inactive. Please contact your HR administrator.',
+            ], 403);
+        }
+
+        if (!$user) {
+            return response()->json([
+                'message' => 'No active account was found with that email address or employee code.',
+            ], 404);
+        }
+
+        try {
+            $token = Password::broker()->createToken($user);
+
+            $origin = $request->header('Origin');
+            if ($origin) {
+                $frontendBase = rtrim($origin, '/');
+            } else {
+                $referer = $request->header('Referer');
+                if ($referer) {
+                    $parsed = parse_url($referer);
+                    $frontendBase = ($parsed['scheme'] ?? 'http') . '://' . ($parsed['host'] ?? 'localhost') . (!empty($parsed['port']) ? ':' . $parsed['port'] : '');
+                } else {
+                    $frontendBase = rtrim(config('app.frontend_url') ?: config('app.url') ?: 'http://localhost:5173', '/');
+                }
+            }
+
+            $resetUrl = $frontendBase . '/reset-password?email=' . rawurlencode($user->email) . '&token=' . rawurlencode($token);
+
+            Mail::to($user->email)->send(new PasswordResetMail(
+                name: $user->name,
+                email: $user->email,
+                resetUrl: $resetUrl,
+                expiresInMinutes: (int) config('auth.passwords.users.expire', 60)
+            ));
+
+            AuditLog::record(
+                $request,
+                'PASSWORD_RESET_LINK_SENT',
+                'Access Management',
+                "Sent password reset email to {$user->email}"
+            );
+
+            return response()->json([
+                'message' => 'A password reset link has been sent to your email address.',
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Password reset email error: ' . $e->getMessage(), [
+                'user' => $user->email,
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'message' => 'Unable to dispatch password reset email at this moment. Please check SMTP settings or try again shortly.',
+                'error' => config('app.debug') ? $e->getMessage() : null,
+            ], 500);
+        }
+    }
+
+    public function resetPassword(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => ['required', 'email', 'max:255'],
+            'token' => ['required', 'string', 'max:255'],
+            'password' => ['required', 'string', 'min:8', 'max:255', 'confirmed'],
+            'password_confirmation' => ['required', 'string', 'same:password'],
+        ]);
+        $validated['email'] = strtolower(trim($validated['email']));
+
+        $targetUser = User::where('email', $validated['email'])->first();
+        if (
+            $targetUser?->employee_id
+            && DB::table('employees')
+                ->where('id', $targetUser->employee_id)
+                ->where(function ($query) {
+                    $query->whereNotNull('deleted_at')
+                        ->orWhereIn('status', ['inactive', 'terminated']);
+                })
+                ->exists()
+        ) {
+            return response()->json([
+                'message' => 'This employee account is inactive or archived and cannot reset password.',
+            ], 403);
+        }
+
+        $status = Password::broker()->reset(
+            [
+                'email' => $validated['email'],
+                'token' => $validated['token'],
+                'password' => $validated['password'],
+                'password_confirmation' => $validated['password_confirmation'],
+            ],
+            function (User $user, string $password): void {
+                $user->forceFill([
+                    'password' => Hash::make($password),
+                    'email_verified_at' => $user->email_verified_at ?? now(),
+                    'must_change_password' => false,
+                ]);
+                $user->setRememberToken(Str::random(60));
+                $user->save();
+                $user->tokens()->delete();
+
+                event(new PasswordReset($user));
+            }
+        );
+
+        if ($status !== Password::PASSWORD_RESET) {
+            return response()->json([
+                'message' => 'This password reset link is invalid, expired, or has already been used. Please request a new link.',
+            ], 422);
+        }
+
+        AuditLog::record(
+            $request,
+            'PASSWORD_RESET_COMPLETED',
+            'Access Management',
+            "Password successfully reset for {$validated['email']}"
+        );
+
+        return response()->json([
+            'message' => 'Your password has been successfully reset. You can now sign in with your new password.',
         ]);
     }
 

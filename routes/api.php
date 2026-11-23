@@ -265,14 +265,14 @@ Route::prefix('v1')->group(function () {
         Route::get('/payroll/runs', [PayrollController::class, 'index'])
             ->middleware('role:super_admin,payroll_admin,auditor');
         Route::get('/payroll/components', [PayrollComponentController::class, 'index'])
-            ->middleware('role:super_admin,hr_admin,payroll_admin');
+            ->middleware('role:super_admin,hr_admin,payroll_admin,auditor');
         Route::post('/payroll/components', [PayrollComponentController::class, 'store'])
             ->middleware('role:super_admin,hr_admin');
         Route::patch('/payroll/components/{id}', [PayrollComponentController::class, 'update'])
             ->whereNumber('id')
             ->middleware('role:super_admin,hr_admin');
         Route::get('/payroll/statutory-config', [PayrollStatutoryController::class, 'index'])
-            ->middleware('role:super_admin,hr_admin,payroll_admin');
+            ->middleware('role:super_admin,hr_admin,payroll_admin,auditor');
         Route::post('/payroll/statutory-config/contributions', [PayrollStatutoryController::class, 'storeContributionConfig'])
             ->middleware('role:super_admin,hr_admin');
         Route::post('/payroll/statutory-config/professional-tax', [PayrollStatutoryController::class, 'storeProfessionalTaxRules'])
@@ -283,7 +283,7 @@ Route::prefix('v1')->group(function () {
             ->whereNumber('branchId')
             ->middleware('role:super_admin,hr_admin');
         Route::get('/payroll/tax-declarations', [PayrollStatutoryController::class, 'declarations'])
-            ->middleware('role:super_admin,hr_admin,payroll_admin');
+            ->middleware('role:super_admin,hr_admin,payroll_admin,auditor');
         Route::put('/payroll/tax-declarations/{employeeId}', [PayrollStatutoryController::class, 'updateDeclaration'])
             ->whereNumber('employeeId')
             ->middleware('role:super_admin,hr_admin');

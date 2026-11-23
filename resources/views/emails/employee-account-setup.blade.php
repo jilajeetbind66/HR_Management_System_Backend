@@ -90,7 +90,7 @@
                     <tr>
                         <td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;text-align:center;">
                             <p style="margin:0;font-size:11px;color:#94a3b8;">
-                                &copy; {{ date('Y') }} Pinweb Private Limited. All rights reserved.
+                                &copy; {{ date('Y') }} <a href="https://pinweb.in" target="_blank" rel="noopener noreferrer" style="color:#059669;text-decoration:none;font-weight:600;">Pinweb Private Limited</a>. All rights reserved.
                             </p>
                         </td>
                     </tr>

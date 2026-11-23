@@ -25,6 +25,7 @@ class AuthController extends Controller
             'identifier' => 'required|string|max:255',
             'password' => 'required|string',
             'role_type' => 'nullable|in:employee,manager,hr,admin',
+            'remember' => 'nullable|boolean',
         ]);
 
         $identifier = trim($validated['identifier']);
@@ -96,7 +97,9 @@ class AuthController extends Controller
         }
 
         $user->tokens()->delete();
-        $token = $user->createToken('hrms-web', ['*'], now()->addHours(12))->plainTextToken;
+        $remember = $request->boolean('remember');
+        $tokenExpiresAt = $remember ? now()->addDays(30) : now()->addHours(12);
+        $token = $user->createToken('hrms-web', ['*'], $tokenExpiresAt)->plainTextToken;
 
         return response()->json([
             'data' => [

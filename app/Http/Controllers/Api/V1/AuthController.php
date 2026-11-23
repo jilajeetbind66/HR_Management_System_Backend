@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Mail\ContactHrMail;
 use App\Mail\PasswordResetMail;
 use App\Models\User;
 use Illuminate\Auth\Events\PasswordReset;
@@ -197,6 +198,50 @@ class AuthController extends Controller
 
             return response()->json([
                 'message' => 'Unable to dispatch password reset email at this moment. Please check SMTP settings or try again shortly.',
+                'error' => config('app.debug') ? $e->getMessage() : null,
+            ], 500);
+        }
+    }
+
+    public function contactHr(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:120'],
+            'email' => ['required', 'email', 'max:255'],
+            'employee_code' => ['nullable', 'string', 'max:50'],
+            'message' => ['required', 'string', 'max:2000'],
+        ]);
+
+        $hrEmail = env('HR_CONTACT_EMAIL', 'jilajeetbind7765@gmail.com');
+
+        try {
+            Mail::to($hrEmail)->send(new ContactHrMail(
+                name: trim($validated['name']),
+                email: strtolower(trim($validated['email'])),
+                employeeCode: !empty($validated['employee_code']) ? trim($validated['employee_code']) : null,
+                messageText: trim($validated['message']),
+                ipAddress: $request->ip()
+            ));
+
+            AuditLog::record(
+                $request,
+                'HR_ACCESS_REQUESTED',
+                'Access Management',
+                "Access request email dispatched to HR ({$hrEmail}) from {$validated['name']} ({$validated['email']})",
+                $validated['name']
+            );
+
+            return response()->json([
+                'message' => 'Your request has been dispatched directly to the HR Department. HR will get in touch with you shortly.',
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Contact HR email error: ' . $e->getMessage(), [
+                'requester' => $validated['email'],
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'message' => 'Unable to send email to HR at this moment. Please copy the HR email directly or try again shortly.',
                 'error' => config('app.debug') ? $e->getMessage() : null,
             ], 500);
         }

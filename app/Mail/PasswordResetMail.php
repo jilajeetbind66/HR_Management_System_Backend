@@ -6,6 +6,7 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
+use Illuminate\Mail\Mailables\Headers;
 use Illuminate\Queue\SerializesModels;
 
 class PasswordResetMail extends Mailable
@@ -35,6 +36,16 @@ class PasswordResetMail extends Mailable
                 'email' => $this->email,
                 'resetUrl' => $this->resetUrl,
                 'expiresInMinutes' => $this->expiresInMinutes,
+            ],
+        );
+    }
+
+    public function headers(): Headers
+    {
+        return new Headers(
+            text: [
+                'X-Mailin-ClickTrack' => '0',
+                'X-Brevo-Track' => '0',
             ],
         );
     }

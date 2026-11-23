@@ -14,7 +14,21 @@ final class EmployeeAccountSetupNotifier
         $user->forceFill(['must_change_password' => true])->save();
 
         $setupToken = Password::broker()->createToken($user);
-        $setupUrl = rtrim(config('app.frontend_url'), '/')
+
+        $origin = request()->header('Origin');
+        if ($origin) {
+            $frontendBase = rtrim($origin, '/');
+        } else {
+            $referer = request()->header('Referer');
+            if ($referer) {
+                $parsed = parse_url($referer);
+                $frontendBase = ($parsed['scheme'] ?? 'http') . '://' . ($parsed['host'] ?? 'localhost') . (!empty($parsed['port']) ? ':' . $parsed['port'] : '');
+            } else {
+                $frontendBase = rtrim(config('app.frontend_url') ?: config('app.url') ?: 'http://localhost:3000', '/');
+            }
+        }
+
+        $setupUrl = $frontendBase
             . '/setup-password?email=' . rawurlencode($user->email)
             . '&token=' . rawurlencode($setupToken);
 

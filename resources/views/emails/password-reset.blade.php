@@ -36,7 +36,7 @@
                             
                             <!-- Action Button -->
                             <div style="text-align:center;margin:28px 0;">
-                                <a href="{{ $resetUrl }}" style="display:inline-block;padding:13px 28px;background:#059669;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:700;font-size:14px;box-shadow:0 4px 12px rgba(5,150,105,0.35);">
+                                <a href="{{ $resetUrl }}" data-ms-click="false" data-brevo-click="false" style="display:inline-block;padding:13px 28px;background:#059669;color:#ffffff;text-decoration:none;border-radius:10px;font-weight:700;font-size:14px;box-shadow:0 4px 12px rgba(5,150,105,0.35);">
                                     Reset Password
                                 </a>
                             </div>
@@ -53,7 +53,7 @@
                                 If you're having trouble clicking the "Reset Password" button, copy and paste the URL below into your web browser:
                             </p>
                             <p style="margin:0 0 24px;font-size:11px;color:#059669;word-break:break-all;">
-                                <a href="{{ $resetUrl }}" style="color:#059669;text-decoration:underline;">{{ $resetUrl }}</a>
+                                <a href="{{ $resetUrl }}" data-ms-click="false" data-brevo-click="false" style="color:#059669;text-decoration:underline;">{{ $resetUrl }}</a>
                             </p>
 
                             <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0 16px;" />

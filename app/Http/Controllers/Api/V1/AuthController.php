@@ -212,7 +212,7 @@ class AuthController extends Controller
             'message' => ['required', 'string', 'max:2000'],
         ]);
 
-        $hrEmail = env('HR_CONTACT_EMAIL', 'jilajeetbind7765@gmail.com');
+        $hrEmail = env('HR_CONTACT_EMAIL', 'khansania2200@gmail.com');
 
         try {
             Mail::to($hrEmail)->send(new ContactHrMail(

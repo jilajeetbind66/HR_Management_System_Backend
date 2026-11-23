@@ -200,6 +200,18 @@ class PerformanceController extends Controller
                 'The objective set has already been submitted; add objectives before the first submission.'
             );
 
+            $existingWeight = (float) DB::table('performance_objectives')
+                ->where('cycle_id', $cycleId)
+                ->where('employee_id', $employeeId)
+                ->sum('weight_percent');
+
+            if (round($existingWeight + (float) $validated['weight_percent'], 2) > 100.0) {
+                $remaining = max(0.0, round(100.0 - $existingWeight, 2));
+                throw ValidationException::withMessages([
+                    'weight_percent' => "Total objective weights cannot exceed 100% for the cycle. Remaining available weight is {$remaining}%.",
+                ]);
+            }
+
             return $this->insertObjective($request, $cycleId, $employeeId, $validated);
         });
 
@@ -219,6 +231,19 @@ class PerformanceController extends Controller
             abort_unless($objective, 404, 'Objective not found.');
             abort_unless((int) $objective->employee_id === $employeeId, 403);
             $this->assertEditableObjective($objective);
+
+            $existingWeight = (float) DB::table('performance_objectives')
+                ->where('cycle_id', $objective->cycle_id)
+                ->where('employee_id', $employeeId)
+                ->where('id', '<>', $objectiveId)
+                ->sum('weight_percent');
+
+            if (round($existingWeight + (float) $validated['weight_percent'], 2) > 100.0) {
+                $remaining = max(0.0, round(100.0 - $existingWeight, 2));
+                throw ValidationException::withMessages([
+                    'weight_percent' => "Total objective weights cannot exceed 100% for the cycle. Remaining available weight is {$remaining}%.",
+                ]);
+            }
 
             DB::table('performance_objectives')->where('id', $objectiveId)->update([
                 'title' => $validated['title'],

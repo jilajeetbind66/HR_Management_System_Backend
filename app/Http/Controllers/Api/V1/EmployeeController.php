@@ -293,7 +293,7 @@ class EmployeeController extends Controller
             ->where('id', $employeeId)
             ->whereNull('deleted_at')
             ->first();
-        abort_if(!$employee, 404);
+        abort_if(!$employee, 404, 'Employee record not found or already archived.');
         $targetUser = DB::table('users')->where('employee_id', $employeeId)->first();
         $currentRole = $targetUser?->role;
         if ($currentRole) {
@@ -654,7 +654,7 @@ class EmployeeController extends Controller
             ->where('id', $employeeId)
             ->whereNull('deleted_at')
             ->first();
-        abort_if(!$employee, 404);
+        abort_if(!$employee, 404, 'Employee record not found or already archived.');
 
         $targetUser = DB::table('users')->where('employee_id', $employeeId)->first();
         if ($actor->role === 'hr_admin' && $targetUser && !in_array($targetUser->role, [
@@ -854,7 +854,7 @@ class EmployeeController extends Controller
             ->where('id', $employeeId)
             ->whereNull('deleted_at')
             ->first();
-        abort_unless($employee, 404);
+        abort_unless($employee, 404, 'Employee record not found or already archived.');
 
         $directReports = DB::table('employees')
             ->where('reporting_manager_id', $employeeId)

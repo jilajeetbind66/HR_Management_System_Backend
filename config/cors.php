@@ -19,9 +19,22 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => [env('FRONTEND_URL', env('APP_URL', 'http://localhost'))],
+    'allowed_origins' => array_values(array_filter(array_unique(array_merge(
+        [
+            'http://localhost:3000',
+            'http://localhost:5173',
+            'http://127.0.0.1:3000',
+            'http://127.0.0.1:5173',
+        ],
+        explode(',', (string) env('CORS_ALLOWED_ORIGINS', '')),
+        explode(',', (string) env('FRONTEND_URL', '')),
+        [(string) env('APP_URL', '')]
+    )))),
 
-    'allowed_origins_patterns' => [],
+    'allowed_origins_patterns' => [
+        '#^https?://localhost(:[0-9]+)?$#',
+        '#^https?://127\.0\.0\.1(:[0-9]+)?$#',
+    ],
 
     'allowed_headers' => ['*'],
 

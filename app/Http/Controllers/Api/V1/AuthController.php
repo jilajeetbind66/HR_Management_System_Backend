@@ -179,7 +179,8 @@ class AuthController extends Controller
                 $request,
                 'PASSWORD_RESET_LINK_SENT',
                 'Access Management',
-                "Sent password reset email to {$user->email}"
+                "Sent password reset email to {$user->email}",
+                $user->name
             );
 
             return response()->json([
@@ -255,7 +256,8 @@ class AuthController extends Controller
             $request,
             'PASSWORD_RESET_COMPLETED',
             'Access Management',
-            "Password successfully reset for {$validated['email']}"
+            "Password successfully reset for {$validated['email']}",
+            $targetUser?->name ?? $validated['email']
         );
 
         return response()->json([

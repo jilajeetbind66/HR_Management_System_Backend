@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\AssetsController;
 use App\Http\Controllers\Api\V1\AttendanceController;
 use App\Http\Controllers\Api\V1\AttendanceImportController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\ChatController;
 use App\Http\Controllers\Api\V1\DocumentsController;
 use App\Http\Controllers\Api\V1\EmailChangeController;
 use App\Http\Controllers\Api\V1\EmployeeController;
@@ -76,6 +77,15 @@ Route::prefix('v1')->group(function () {
         Route::get('/uploads', [UploadController::class, 'index']);
         Route::post('/uploads', [UploadController::class, 'store']);
         Route::get('/uploads/{id}/download', [UploadController::class, 'download']);
+
+        // Live Chat Module (Super Admin & Employee 1-on-1 Chat)
+        Route::get('/chat/threads', [ChatController::class, 'getThreads']);
+        Route::get('/chat/threads/{threadId}/messages', [ChatController::class, 'getMessages'])
+            ->whereNumber('threadId');
+        Route::post('/chat/messages', [ChatController::class, 'sendMessage']);
+        Route::post('/chat/threads/{threadId}/read', [ChatController::class, 'markAsRead'])
+            ->whereNumber('threadId');
+        Route::get('/chat/unread-count', [ChatController::class, 'getUnreadCount']);
     });
 
     Route::middleware('auth:sanctum')->group(function () {

@@ -19,6 +19,9 @@ class ChatMessage extends Model
         'message',
         'is_read',
         'read_at',
+        'is_edited',
+        'edited_at',
+        'is_deleted',
     ];
 
     protected function casts(): array
@@ -26,6 +29,9 @@ class ChatMessage extends Model
         return [
             'is_read' => 'boolean',
             'read_at' => 'datetime',
+            'is_edited' => 'boolean',
+            'edited_at' => 'datetime',
+            'is_deleted' => 'boolean',
         ];
     }
 

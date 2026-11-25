@@ -119,14 +119,13 @@ class ChatController extends Controller
 
         $messages = $query->orderBy('id', 'ASC')->limit(100)->get();
 
-        // Mark incoming messages as read
-        $unreadIncomingIds = $messages->where('receiver_id', $currentUser->id)
-            ->where('is_read', false)
-            ->pluck('id')
-            ->all();
+        // Mark any incoming unread messages in this thread as read
+        $incomingUnreadQuery = ChatMessage::where('thread_id', $threadId)
+            ->where('receiver_id', $currentUser->id)
+            ->where('is_read', false);
 
-        if (!empty($unreadIncomingIds)) {
-            ChatMessage::whereIn('id', $unreadIncomingIds)->update([
+        if ($incomingUnreadQuery->exists()) {
+            $incomingUnreadQuery->update([
                 'is_read' => true,
                 'read_at' => now(),
             ]);
@@ -139,8 +138,21 @@ class ChatController extends Controller
             }
         }
 
+        // Calculate latest message ID sent by currentUser that receiver has read
+        $lastReadMessageId = (int) ChatMessage::where('thread_id', $threadId)
+            ->where('sender_id', $currentUser->id)
+            ->where('is_read', true)
+            ->max('id');
+
+        // Get any deleted message IDs for this thread
+        $deletedMessageIds = ChatMessage::where('thread_id', $threadId)
+            ->where('is_deleted', true)
+            ->pluck('id');
+
         return response()->json([
             'data' => $messages,
+            'last_read_message_id' => $lastReadMessageId,
+            'deleted_message_ids' => $deletedMessageIds,
             'thread' => [
                 'id' => $thread->id,
                 'admin_id' => $thread->admin_id,
@@ -287,6 +299,84 @@ class ChatController extends Controller
 
         return response()->json([
             'unread_count' => $count,
+        ]);
+    }
+
+    /**
+     * Edit an existing chat message.
+     */
+    public function updateMessage(Request $request, int $id): JsonResponse
+    {
+        $currentUser = $request->user();
+        $message = ChatMessage::findOrFail($id);
+
+        if ($message->sender_id !== $currentUser->id) {
+            abort(403, 'You can only edit your own messages.');
+        }
+
+        if ($message->is_deleted) {
+            abort(422, 'Cannot edit a deleted message.');
+        }
+
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'max:5000'],
+        ]);
+
+        $newText = trim($validated['message']);
+        $message->update([
+            'message' => $newText,
+            'is_edited' => true,
+            'edited_at' => now(),
+        ]);
+
+        // If this was the last message on thread, update thread preview
+        $thread = ChatThread::find($message->thread_id);
+        if ($thread) {
+            $lastMsg = ChatMessage::where('thread_id', $thread->id)->orderBy('id', 'desc')->first();
+            if ($lastMsg && $lastMsg->id === $message->id) {
+                $thread->update(['last_message' => Str::limit($newText, 150)]);
+            }
+        }
+
+        return response()->json([
+            'message' => 'Message updated successfully.',
+            'data' => $message,
+        ]);
+    }
+
+    /**
+     * Delete an existing chat message.
+     */
+    public function deleteMessage(Request $request, int $id): JsonResponse
+    {
+        $currentUser = $request->user();
+        $message = ChatMessage::findOrFail($id);
+
+        if ($message->sender_id !== $currentUser->id && $currentUser->role !== 'super_admin') {
+            abort(403, 'Unauthorized to delete this message.');
+        }
+
+        $message->update([
+            'is_deleted' => true,
+            'message' => 'This message was deleted',
+        ]);
+
+        $thread = ChatThread::find($message->thread_id);
+        if ($thread) {
+            $lastActiveMsg = ChatMessage::where('thread_id', $thread->id)
+                ->where('is_deleted', false)
+                ->orderBy('id', 'desc')
+                ->first();
+
+            $thread->update([
+                'last_message' => $lastActiveMsg ? Str::limit($lastActiveMsg->message, 150) : 'This message was deleted',
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'Message deleted successfully.',
+            'data' => $message,
+            'deleted_id' => $id,
         ]);
     }
 }

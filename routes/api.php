@@ -84,6 +84,10 @@ Route::prefix('v1')->group(function () {
         Route::get('/chat/threads/{threadId}/messages', [ChatController::class, 'getMessages'])
             ->whereNumber('threadId');
         Route::post('/chat/messages', [ChatController::class, 'sendMessage']);
+        Route::put('/chat/messages/{id}', [ChatController::class, 'updateMessage'])
+            ->whereNumber('id');
+        Route::delete('/chat/messages/{id}', [ChatController::class, 'deleteMessage'])
+            ->whereNumber('id');
         Route::post('/chat/threads/{threadId}/read', [ChatController::class, 'markAsRead'])
             ->whereNumber('threadId');
         Route::get('/chat/unread-count', [ChatController::class, 'getUnreadCount']);

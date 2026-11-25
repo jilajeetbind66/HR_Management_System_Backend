@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\AssetsController;
 use App\Http\Controllers\Api\V1\AttendanceController;
 use App\Http\Controllers\Api\V1\AttendanceImportController;
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\ClientController;
 use App\Http\Controllers\Api\V1\DocumentsController;
 use App\Http\Controllers\Api\V1\EmailChangeController;
 use App\Http\Controllers\Api\V1\EmployeeController;
@@ -399,6 +400,24 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:super_admin,hr_admin');
         Route::patch('/leads/{id}/progress', [LeadController::class, 'updateProgress'])
             ->whereNumber('id');
+
+        // M18 Client Management Module (Super Admin & HR Admin)
+        Route::get('/clients', [ClientController::class, 'index'])
+            ->middleware('role:super_admin,hr_admin');
+        Route::post('/clients', [ClientController::class, 'store'])
+            ->middleware('role:super_admin,hr_admin');
+        Route::get('/clients/{id}', [ClientController::class, 'show'])
+            ->whereNumber('id')
+            ->middleware('role:super_admin,hr_admin');
+        Route::put('/clients/{id}', [ClientController::class, 'update'])
+            ->whereNumber('id')
+            ->middleware('role:super_admin,hr_admin');
+        Route::post('/clients/{id}/payment', [ClientController::class, 'recordPayment'])
+            ->whereNumber('id')
+            ->middleware('role:super_admin,hr_admin');
+        Route::delete('/clients/{id}', [ClientController::class, 'destroy'])
+            ->whereNumber('id')
+            ->middleware('role:super_admin,hr_admin');
 
         // M00 Account credential administration
         Route::prefix('admin')->middleware('role:super_admin')->group(function () {

@@ -27,8 +27,10 @@ class ChatController extends Controller
             // Fetch all users that are employees/staff
             $employees = DB::table('users')
                 ->where('users.id', '<>', $currentUser->id)
-                ->whereNull('users.deleted_at')
-                ->leftJoin('employees', 'employees.id', '=', 'users.employee_id')
+                ->leftJoin('employees', function ($join) {
+                    $join->on('employees.id', '=', 'users.employee_id')
+                         ->whereNull('employees.deleted_at');
+                })
                 ->leftJoin('branches', 'branches.id', '=', 'employees.branch_id')
                 ->leftJoin('chat_threads', function ($join) use ($currentUser) {
                     $join->on('chat_threads.employee_id', '=', 'users.id')
@@ -63,14 +65,14 @@ class ChatController extends Controller
 
         // For non-super_admin (Employee, Manager, etc.):
         // Find or provide the thread with Super Admin
-        $superAdmin = User::where('role', 'super_admin')->first();
+        $thread = ChatThread::where('employee_id', $currentUser->id)
+            ->orderByRaw('last_message_at IS NULL, last_message_at DESC')
+            ->first();
+
+        $superAdmin = $thread ? User::find($thread->admin_id) : User::where('role', 'super_admin')->first();
         if (!$superAdmin) {
             return response()->json(['data' => []]);
         }
-
-        $thread = ChatThread::where('admin_id', $superAdmin->id)
-            ->where('employee_id', $currentUser->id)
-            ->first();
 
         $threadData = [
             'thread_id' => $thread?->id,

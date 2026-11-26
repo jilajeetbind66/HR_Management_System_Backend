@@ -424,6 +424,57 @@ class AuthController extends Controller
         return response()->json(['message' => 'Logged out successfully.']);
     }
 
+    public function updateProfile(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $validated = $request->validate([
+            'phone' => ['nullable', 'string', 'max:25'],
+            'gender' => ['nullable', 'string', 'in:Male,Female,Other'],
+            'date_of_birth' => ['nullable', 'date'],
+            'avatar' => ['nullable', 'string'],
+            'name' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        if ($user->employee_id) {
+            $employee = DB::table('employees')->where('id', $user->employee_id)->first();
+            if ($employee) {
+                $employeeUpdates = ['updated_at' => now()];
+                if (array_key_exists('phone', $validated)) {
+                    $employeeUpdates['phone'] = $validated['phone'];
+                }
+                if (array_key_exists('gender', $validated)) {
+                    $employeeUpdates['gender'] = $validated['gender'];
+                }
+                if (array_key_exists('date_of_birth', $validated)) {
+                    $employeeUpdates['date_of_birth'] = $validated['date_of_birth'];
+                }
+                if (array_key_exists('avatar', $validated)) {
+                    $employeeUpdates['avatar'] = $validated['avatar'];
+                }
+                DB::table('employees')->where('id', $user->employee_id)->update($employeeUpdates);
+            }
+        }
+
+        // If super admin or user without employee record updates name
+        if ($user->role === 'super_admin' && !empty($validated['name'])) {
+            $user->name = trim($validated['name']);
+            $user->save();
+        }
+
+        AuditLog::record(
+            $request,
+            'PROFILE_UPDATED',
+            'Account Management',
+            "Updated profile details for user #{$user->id} ({$user->name})"
+        );
+
+        return response()->json([
+            'message' => 'Profile updated successfully.',
+            'data' => $this->userPayload($user->fresh()),
+        ]);
+    }
+
     private function userPayload(User $user): array
     {
         $employee = $user->employee_id
@@ -464,6 +515,13 @@ class AuthController extends Controller
             'must_change_password' => (bool) $user->must_change_password,
             'employee_code' => $employee->employee_code ?? null,
             'designation' => $employee->designation ?? null,
+            'department' => $employee->department ?? null,
+            'phone' => $employee->phone ?? null,
+            'gender' => $employee->gender ?? null,
+            'date_of_birth' => $employee->date_of_birth ?? null,
+            'date_of_joining' => $employee->date_of_joining ?? null,
+            'employment_type' => $employee->employment_type ?? null,
+            'probation_status' => $employee->probation_status ?? null,
             'branch_id' => $employee->branch_id ?? null,
             'branch_name' => $employee
                 ? DB::table('branches')->where('id', $employee->branch_id)->value('name')

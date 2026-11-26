@@ -140,6 +140,10 @@ class EmployeeImportController extends Controller
 
                     DB::table('leave_balances')->insert([
                         'employee_id' => $employeeId,
+                        'cl' => 8.00,
+                        'sl' => 8.00,
+                        'pl' => 12.00,
+                        'comp_off' => 0.00,
                         'created_at' => $now,
                         'updated_at' => $now,
                     ]);

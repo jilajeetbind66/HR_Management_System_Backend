@@ -46,7 +46,7 @@ class LeaveController extends Controller
             foreach (['cl', 'sl', 'pl', 'comp_off'] as $column) {
                 $used = (float) ($employeeUsage[$column]['approved'] ?? 0);
                 $pending = (float) ($employeeUsage[$column]['pending'] ?? 0);
-                $quota = ['cl' => 12.0, 'sl' => 12.0, 'pl' => 15.0][$column] ?? null;
+                $quota = ['cl' => 8.0, 'sl' => 8.0, 'pl' => 12.0][$column] ?? null;
                 $accrued = $quota === null
                     ? (float) $balance->{$column}
                     : $this->proratedEntitlement($quota, $balance->date_of_joining, $fiscalStart, $fiscalEnd, $today);
@@ -381,7 +381,7 @@ class LeaveController extends Controller
                     [$fiscalStart, $fiscalEnd, $today] = $this->fiscalYearWindow();
                     $usage = $this->usageForEmployees([(int) $leave->employee_id], $fiscalStart, $fiscalEnd);
                     $approvedUsage = (float) ($usage[$leave->employee_id][$balanceColumn]['approved'] ?? 0);
-                    $quota = ['cl' => 12.0, 'sl' => 12.0, 'pl' => 15.0][$balanceColumn] ?? null;
+                    $quota = ['cl' => 8.0, 'sl' => 8.0, 'pl' => 12.0][$balanceColumn] ?? null;
                     $accrued = $quota === null || !$balance
                         ? (float) ($balance->{$balanceColumn} ?? 0)
                         : $this->proratedEntitlement(
@@ -694,7 +694,7 @@ class LeaveController extends Controller
 
     private function availableBalance(int $employeeId, string $column, object $balance): float
     {
-        $quota = ['cl' => 12.0, 'sl' => 12.0, 'pl' => 15.0][$column] ?? null;
+        $quota = ['cl' => 8.0, 'sl' => 8.0, 'pl' => 12.0][$column] ?? null;
         if ($quota === null) {
             return max(0, (float) $balance->{$column});
         }

@@ -148,7 +148,7 @@ class ClientController extends Controller
 
         $validated = $request->validate([
             'client_name' => 'required|string|max:255',
-            'phone' => 'required|string|max:25',
+            'phone' => ['required', 'string', 'digits:10', 'regex:/^[6-9]\d{9}$/'],
             'email' => 'nullable|email|max:255',
             'project_name' => 'required|string|max:255',
             'service_type' => 'nullable|string|max:255',
@@ -252,7 +252,7 @@ class ClientController extends Controller
 
         $validated = $request->validate([
             'client_name' => 'required|string|max:255',
-            'phone' => 'required|string|max:25',
+            'phone' => ['required', 'string', 'digits:10', 'regex:/^[6-9]\d{9}$/'],
             'email' => 'nullable|email|max:255',
             'project_name' => 'required|string|max:255',
             'service_type' => 'nullable|string|max:255',

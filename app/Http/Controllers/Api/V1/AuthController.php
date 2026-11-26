@@ -429,7 +429,7 @@ class AuthController extends Controller
         $user = $request->user();
 
         $validated = $request->validate([
-            'phone' => ['nullable', 'string', 'max:25'],
+            'phone' => ['nullable', 'string', 'digits:10', 'regex:/^[6-9]\d{9}$/'],
             'gender' => ['nullable', 'string', 'in:Male,Female,Other'],
             'date_of_birth' => ['nullable', 'date'],
             'avatar' => ['nullable', 'string'],

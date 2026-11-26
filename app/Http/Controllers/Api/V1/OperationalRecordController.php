@@ -110,7 +110,7 @@ class OperationalRecordController extends Controller
             'first_name' => 'required|string|max:255',
             'last_name' => 'nullable|string|max:255',
             'email' => 'required|email|max:255',
-            'phone' => ['nullable', 'digits:10'],
+            'phone' => ['nullable', 'digits:10', 'regex:/^[6-9]\d{9}$/'],
             'current_ctc' => 'nullable|string|max:100',
             'expected_ctc' => 'nullable|string|max:100',
             'notice_period' => 'nullable|string|max:100',

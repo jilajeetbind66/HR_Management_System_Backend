@@ -951,7 +951,11 @@ class EmployeeController extends Controller
             ->whereNull('employees.deleted_at')
             ->leftJoin('branches', 'employees.branch_id', '=', 'branches.id')
             ->leftJoin('employees as reporting_managers', 'employees.reporting_manager_id', '=', 'reporting_managers.id')
-            ->leftJoin('users as employee_users', 'employee_users.employee_id', '=', 'employees.id');
+            ->leftJoin('users as employee_users', 'employee_users.employee_id', '=', 'employees.id')
+            ->where(function ($query) {
+                $query->whereNull('employee_users.role')
+                    ->orWhere('employee_users.role', '<>', 'super_admin');
+            });
     }
 
     private function employeeProfileColumns(): array

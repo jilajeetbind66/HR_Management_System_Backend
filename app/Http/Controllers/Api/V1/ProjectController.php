@@ -110,10 +110,16 @@ class ProjectController extends Controller
                 && $p->active_due_date
                 && $today > $p->active_due_date;
             if ($p->is_overdue) {
-                $diff = (strtotime($today) - strtotime($p->active_due_date)) / 86400;
-                $overdueDays = max(0, (int)$diff);
-                if ($p->status === 'in_progress') {
-                    $p->status = 'overdue';
+                // If a standard project had a Sunday deadline, grant Monday business grace period
+                $dueDateCarbon = \Carbon\Carbon::parse($p->active_due_date);
+                if ($dueDateCarbon->isSunday() && \Carbon\Carbon::parse($today)->isMonday() && empty($p->is_weekend_emergency)) {
+                    $p->is_overdue = false;
+                } else {
+                    $diff = (strtotime($today) - strtotime($p->active_due_date)) / 86400;
+                    $overdueDays = max(0, (int)$diff);
+                    if ($p->status === 'in_progress') {
+                        $p->status = 'overdue';
+                    }
                 }
             }
             $p->overdue_days = $overdueDays;
@@ -172,7 +178,33 @@ class ProjectController extends Controller
             ],
             'start_date' => 'required|date',
             'planned_end_date' => 'required|date|after_or_equal:start_date',
+            'is_weekend_emergency' => 'nullable|boolean',
+            'emergency_reason' => 'nullable|string|max:1000',
+            'weekend_benefit_type' => 'nullable|in:comp_off,allowance,recognition',
+            'weekend_benefit_amount' => 'nullable|numeric|min:0',
         ]);
+
+        $isStartSunday = \Carbon\Carbon::parse($validated['start_date'])->isSunday();
+        $isEndSunday = \Carbon\Carbon::parse($validated['planned_end_date'])->isSunday();
+        $isEmergency = !empty($validated['is_weekend_emergency']);
+
+        if ($isStartSunday && !$isEmergency) {
+            throw ValidationException::withMessages([
+                'start_date' => ['The selected start date is a Sunday (Company Week Off). Please choose a working day (Monday) or enable Emergency Weekend Assignment.'],
+            ]);
+        }
+
+        if ($isEndSunday && !$isEmergency) {
+            throw ValidationException::withMessages([
+                'planned_end_date' => ['The project deadline cannot be set on a Sunday (Company Week Off). Please choose a business day (e.g. Friday or Monday) or enable Emergency Weekend Assignment.'],
+            ]);
+        }
+
+        if ($isEmergency && empty($validated['emergency_reason'])) {
+            throw ValidationException::withMessages([
+                'emergency_reason' => ['An emergency reason/justification is required when creating an Emergency Weekend Assignment.'],
+            ]);
+        }
 
         if (
             $request->user()->role === 'manager'
@@ -181,20 +213,28 @@ class ProjectController extends Controller
             abort(403);
         }
 
-        $project = DB::transaction(function () use ($validated, $request) {
+        $project = DB::transaction(function () use ($validated, $request, $isEmergency) {
             $year = now()->format('Y');
             $nextNumber = (int) DB::table('projects')->max('id') + 1;
             do {
                 $code = 'PRJ-' . $year . '-' . str_pad((string) $nextNumber++, 3, '0', STR_PAD_LEFT);
             } while (DB::table('projects')->where('project_code', $code)->exists());
 
+            $priority = $isEmergency ? 'Urgent' : ($validated['priority'] ?? 'Medium');
+            $benefitType = $isEmergency ? ($validated['weekend_benefit_type'] ?? 'comp_off') : null;
+            $benefitAmount = ($isEmergency && $benefitType === 'allowance') ? ($validated['weekend_benefit_amount'] ?? null) : null;
+
             $projectId = DB::table('projects')->insertGetId([
                 'project_code' => $code,
                 'name' => $validated['name'],
                 'description' => $validated['description'] ?? 'No description provided',
                 'deliverable' => $validated['deliverable'] ?? 'Project Milestone Deliverable',
-                'priority' => $validated['priority'] ?? 'Medium',
+                'priority' => $priority,
                 'project_type' => $validated['project_type'] ?? null,
+                'is_weekend_emergency' => $isEmergency,
+                'emergency_reason' => $isEmergency ? $validated['emergency_reason'] : null,
+                'weekend_benefit_type' => $benefitType,
+                'weekend_benefit_amount' => $benefitAmount,
                 'status' => 'in_progress',
                 'created_by' => $request->user()->name,
                 'created_at' => now(),
@@ -209,6 +249,9 @@ class ProjectController extends Controller
             $assignment->start_date = $validated['start_date'];
             $assignment->due_date = $validated['planned_end_date'];
             $assignment->active_due_date = $validated['planned_end_date'];
+            $assignment->is_weekend_emergency = $isEmergency;
+            $assignment->weekend_benefit_type = $benefitType;
+            $assignment->weekend_benefit_amount = $benefitAmount;
             $assignment->progress_percent = 0;
             $assignment->status = 'in_progress';
             $assignment->version = 1;
@@ -219,16 +262,26 @@ class ProjectController extends Controller
                 $request,
                 'PROJECT_ASSIGNED',
                 'Projects',
-                "Created project {$code} and assigned it to employee {$validated['assigned_employee_id']}"
+                "Created project {$code} and assigned it to employee {$validated['assigned_employee_id']}" . ($isEmergency ? " [Emergency Weekend]" : "")
             );
 
             $assignedUserId = DB::table('users')->where('employee_id', $validated['assigned_employee_id'])->value('id');
             if ($assignedUserId) {
+                $notifTitle = $isEmergency
+                    ? "🚨 Emergency Weekend Project Assigned: {$validated['name']}"
+                    : "New Project Assigned: {$validated['name']}";
+                $benefitText = $benefitType === 'comp_off'
+                    ? '1 Comp-Off Leave Credit upon delivery'
+                    : ($benefitType === 'allowance' ? "Weekend Allowance (₹{$benefitAmount})" : 'Special Appraisal Recognition');
+                $notifMessage = $isEmergency
+                    ? "You have been assigned an Emergency Weekend Project by {$request->user()->name}. Reason: {$validated['emergency_reason']}. Benefit upon delivery: {$benefitText}. Deadline: {$validated['planned_end_date']}."
+                    : "You have been assigned project '{$validated['name']}' ({$code}) by {$request->user()->name}. Deadline: {$validated['planned_end_date']}.";
+
                 DB::table('user_notifications')->insert([
                     'user_id' => $assignedUserId,
-                    'event_key' => 'project.assigned',
-                    'title' => "New Project Assigned: {$validated['name']}",
-                    'message' => "You have been assigned project '{$validated['name']}' ({$code}) by {$request->user()->name}. Deadline: {$validated['planned_end_date']}.",
+                    'event_key' => $isEmergency ? 'project.weekend_emergency' : 'project.assigned',
+                    'title' => $notifTitle,
+                    'message' => $notifMessage,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
@@ -618,19 +671,68 @@ class ProjectController extends Controller
             }
 
             if ($decision === 'accept') {
+                $now = now();
                 DB::table('project_assignments')->where('id', $lockedAssignment->id)->update([
                     'status' => 'completed',
-                    'actual_completed_at' => now(),
-                    'accepted_at' => now(),
+                    'actual_completed_at' => $now,
+                    'accepted_at' => $now,
                     'accepted_by' => $request->user()->name,
                     'review_note' => $validated['remarks'] ?? null,
-                    'updated_at' => now()
+                    'updated_at' => $now
                 ]);
 
                 DB::table('projects')->where('id', $lockedAssignment->project_id)->update([
                     'status' => 'completed',
-                    'updated_at' => now()
+                    'updated_at' => $now
                 ]);
+
+                // Weekend Emergency Benefit Auto-Credit
+                $isWeekendEmergency = (bool) ($lockedAssignment->is_weekend_emergency ?? false);
+                $benefitType = $lockedAssignment->weekend_benefit_type ?? 'comp_off';
+                if ($isWeekendEmergency && empty($lockedAssignment->benefit_credited_at)) {
+                    DB::table('project_assignments')->where('id', $lockedAssignment->id)->update([
+                        'benefit_credited_at' => $now,
+                    ]);
+                    DB::table('projects')->where('id', $lockedAssignment->project_id)->update([
+                        'benefit_credited_at' => $now,
+                    ]);
+
+                    if ($benefitType === 'comp_off') {
+                        $balance = DB::table('leave_balances')->where('employee_id', $lockedAssignment->employee_id)->first();
+                        if ($balance) {
+                            DB::table('leave_balances')->where('id', $balance->id)->increment('comp_off', 1);
+                        } else {
+                            DB::table('leave_balances')->insert([
+                                'employee_id' => $lockedAssignment->employee_id,
+                                'cl' => 0,
+                                'sl' => 0,
+                                'pl' => 0,
+                                'comp_off' => 1.00,
+                                'created_at' => $now,
+                                'updated_at' => $now,
+                            ]);
+                        }
+                    }
+
+                    // Send reward notification to employee
+                    $devUserId = DB::table('users')->where('employee_id', $lockedAssignment->employee_id)->value('id');
+                    if ($devUserId) {
+                        $rewardMsg = $benefitType === 'comp_off'
+                            ? "Congratulations! 1 Comp-Off leave has been credited to your leave balance for successfully delivering the Emergency Weekend Project."
+                            : ($benefitType === 'allowance'
+                                ? "Weekend Overtime Allowance of ₹{$lockedAssignment->weekend_benefit_amount} has been approved for your emergency weekend project delivery."
+                                : "Your emergency weekend project delivery has been approved with special performance appraisal recognition.");
+
+                        DB::table('user_notifications')->insert([
+                            'user_id' => $devUserId,
+                            'event_key' => 'project.weekend_reward',
+                            'title' => $benefitType === 'comp_off' ? '🎉 1 Comp-Off Leave Credited!' : '🎉 Weekend Emergency Project Approved!',
+                            'message' => $rewardMsg,
+                            'created_at' => $now,
+                            'updated_at' => $now,
+                        ]);
+                    }
+                }
             } else {
                 DB::table('project_assignments')->where('id', $lockedAssignment->id)->update([
                     'status' => 'in_progress',

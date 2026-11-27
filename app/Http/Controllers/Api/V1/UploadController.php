@@ -274,7 +274,14 @@ class UploadController extends Controller
         ]);
 
         if ($module === 'employee_photos') {
-            DB::table('employees')->where('id', $employeeId)->update([
+            if ($employeeId) {
+                DB::table('employees')->where('id', $employeeId)->update([
+                    'avatar' => $asset['secure_url'],
+                    'updated_at' => now(),
+                ]);
+            }
+            // Always synchronize users.avatar for the authenticated user as well
+            DB::table('users')->where('id', $request->user()->id)->update([
                 'avatar' => $asset['secure_url'],
                 'updated_at' => now(),
             ]);
@@ -300,11 +307,16 @@ class UploadController extends Controller
                 'record_id' => $recordId,
                 'document_type' => $validated['document_type'] ?? null,
                 'original_filename' => $request->file('file')->getClientOriginalName(),
+                'file_name' => $request->file('file')->getClientOriginalName(),
+                'file_url' => $asset['secure_url'],
+                'url' => $asset['secure_url'],
+                'secure_url' => $asset['secure_url'],
                 'mime_type' => $request->file('file')->getMimeType(),
                 'file_size' => $request->file('file')->getSize(),
-                'status' => 'pending',
-                'url' => $deliveryType === 'upload' ? $asset['secure_url'] : null,
+                'status' => 'approved',
+                'created_at' => now()->toIso8601String(),
             ],
+            'message' => 'File uploaded successfully',
         ], 201);
     }
 
@@ -404,6 +416,9 @@ class UploadController extends Controller
         }
 
         if (in_array($module, ['employee_documents', 'employee_photos'], true)) {
+            if ($user->role === 'super_admin') {
+                return;
+            }
             if (
                 !$employeeId
                 || (!$this->canManageAllEmployeeDocuments($user->role)

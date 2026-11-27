@@ -436,6 +436,26 @@ class AuthController extends Controller
             'name' => ['nullable', 'string', 'max:255'],
         ]);
 
+        // 1. Update user record directly in users table
+        $userUpdates = ['updated_at' => now()];
+        if (array_key_exists('avatar', $validated)) {
+            $userUpdates['avatar'] = $validated['avatar'];
+        }
+        if (array_key_exists('phone', $validated)) {
+            $userUpdates['phone'] = $validated['phone'];
+        }
+        if (array_key_exists('gender', $validated)) {
+            $userUpdates['gender'] = $validated['gender'];
+        }
+        if (array_key_exists('date_of_birth', $validated)) {
+            $userUpdates['date_of_birth'] = $validated['date_of_birth'];
+        }
+        if ($user->role === 'super_admin' && !empty($validated['name'])) {
+            $userUpdates['name'] = trim($validated['name']);
+        }
+        DB::table('users')->where('id', $user->id)->update($userUpdates);
+
+        // 2. If user is linked to an employee record, keep it synchronized
         if ($user->employee_id) {
             $employee = DB::table('employees')->where('id', $user->employee_id)->first();
             if ($employee) {
@@ -454,12 +474,6 @@ class AuthController extends Controller
                 }
                 DB::table('employees')->where('id', $user->employee_id)->update($employeeUpdates);
             }
-        }
-
-        // If super admin or user without employee record updates name
-        if ($user->role === 'super_admin' && !empty($validated['name'])) {
-            $user->name = trim($validated['name']);
-            $user->save();
         }
 
         AuditLog::record(
@@ -514,11 +528,11 @@ class AuthController extends Controller
             'role' => $user->role,
             'must_change_password' => (bool) $user->must_change_password,
             'employee_code' => $employee->employee_code ?? null,
-            'designation' => $employee->designation ?? null,
-            'department' => $employee->department ?? null,
-            'phone' => $employee->phone ?? null,
-            'gender' => $employee->gender ?? null,
-            'date_of_birth' => $employee->date_of_birth ?? null,
+            'designation' => $employee->designation ?? ($user->role === 'super_admin' ? 'Primary Organization Founder & Super Administrator' : null),
+            'department' => $employee->department ?? ($user->role === 'super_admin' ? 'Executive & Governance' : null),
+            'phone' => $user->phone ?? $employee->phone ?? null,
+            'gender' => $user->gender ?? $employee->gender ?? 'Other',
+            'date_of_birth' => $user->date_of_birth ?? $employee->date_of_birth ?? null,
             'date_of_joining' => $employee->date_of_joining ?? null,
             'employment_type' => $employee->employment_type ?? null,
             'probation_status' => $employee->probation_status ?? null,
@@ -526,7 +540,7 @@ class AuthController extends Controller
             'branch_name' => $employee
                 ? DB::table('branches')->where('id', $employee->branch_id)->value('name')
                 : null,
-            'avatar' => $employee->avatar ?? null,
+            'avatar' => $user->avatar ?? $employee->avatar ?? null,
             'has_lead_access' => (bool) ($employee->has_lead_access ?? false),
             'pan' => $maskSensitive($statutory->pan ?? null),
             'uan' => $maskSensitive($statutory->uan ?? null),

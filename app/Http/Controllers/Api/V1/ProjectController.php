@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ProjectAssignment;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -63,6 +64,13 @@ class ProjectController extends Controller
                 'project_assignments.active_due_date',
                 'project_assignments.progress_percent',
                 'project_assignments.actual_completed_at',
+                'project_assignments.delivery_timeliness',
+                'project_assignments.days_ahead_or_late',
+                'project_assignments.appreciation_rating',
+                'project_assignments.appreciation_badge',
+                'project_assignments.appreciation_note',
+                'project_assignments.appreciated_by',
+                'project_assignments.appreciated_at',
                 'project_assignments.review_note',
                 'project_assignments.accepted_by',
                 'project_assignments.returned_by',
@@ -653,6 +661,10 @@ class ProjectController extends Controller
         $validated = $request->validate([
             'decision' => 'sometimes|in:accept,return',
             'remarks' => 'nullable|string',
+            'appreciation_rating' => 'nullable|integer|min:1|max:5',
+            'appreciation_badge' => 'nullable|string|max:64',
+            'appreciation_note' => 'nullable|string|max:1000',
+            'publish_announcement' => 'nullable|boolean',
         ]);
         $decision = $validated['decision'] ?? 'accept';
         $assignment = DB::table('project_assignments')->where('id', $id)->first();
@@ -672,9 +684,33 @@ class ProjectController extends Controller
 
             if ($decision === 'accept') {
                 $now = now();
+                $dueDate = $lockedAssignment->active_due_date ?? $lockedAssignment->due_date ?? null;
+                $effectiveDate = $now->toDateString();
+
+                $deliveryTimeliness = null;
+                $daysAheadOrLate = null;
+                if ($dueDate) {
+                    $daysAheadOrLate = (int) Carbon::parse($effectiveDate)->diffInDays(Carbon::parse($dueDate), false);
+                    $deliveryTimeliness = $daysAheadOrLate > 0
+                        ? 'early'
+                        : ($daysAheadOrLate === 0 ? 'on_time' : 'late');
+                }
+
+                $rating = isset($validated['appreciation_rating']) ? (int) $validated['appreciation_rating'] : null;
+                $badge = !empty($validated['appreciation_badge']) ? trim($validated['appreciation_badge']) : null;
+                $appreciationNote = !empty($validated['appreciation_note']) ? trim($validated['appreciation_note']) : null;
+                $hasAppreciation = $rating !== null || $badge !== null || $appreciationNote !== null;
+
                 DB::table('project_assignments')->where('id', $lockedAssignment->id)->update([
                     'status' => 'completed',
                     'actual_completed_at' => $now,
+                    'delivery_timeliness' => $deliveryTimeliness,
+                    'days_ahead_or_late' => $daysAheadOrLate,
+                    'appreciation_rating' => $rating,
+                    'appreciation_badge' => $badge,
+                    'appreciation_note' => $appreciationNote,
+                    'appreciated_by' => $hasAppreciation ? $request->user()->name : null,
+                    'appreciated_at' => $hasAppreciation ? $now : null,
                     'accepted_at' => $now,
                     'accepted_by' => $request->user()->name,
                     'review_note' => $validated['remarks'] ?? null,
@@ -685,6 +721,32 @@ class ProjectController extends Controller
                     'status' => 'completed',
                     'updated_at' => $now
                 ]);
+
+                // Optional Company-Wide Appreciation Shoutout in Announcements
+                if (!empty($validated['publish_announcement']) && $hasAppreciation) {
+                    $project = DB::table('projects')->where('id', $lockedAssignment->project_id)->first();
+                    $emp = DB::table('employees')->where('id', $lockedAssignment->employee_id)->first();
+                    if ($project && $emp) {
+                        $empName = trim("{$emp->first_name} {$emp->last_name}");
+                        $timelinessLabel = $deliveryTimeliness === 'early'
+                            ? "{$daysAheadOrLate} day(s) ahead of schedule"
+                            : ($deliveryTimeliness === 'on_time' ? 'right on time' : 'successfully');
+                        $badgePart = $badge ? " Badge: {$badge}." : '';
+                        $ratingPart = $rating ? " Rating: {$rating}/5 Stars." : '';
+                        $notePart = $appreciationNote ? " Note: \"{$appreciationNote}\"" : '';
+
+                        DB::table('announcements')->insert([
+                            'title' => "🌟 Kudos to {$empName} for {$project->name}!",
+                            'content' => "{$empName} ({$emp->employee_code}) delivered '{$project->name}' {$timelinessLabel}!{$badgePart}{$ratingPart}{$notePart}",
+                            'category' => 'Recognition',
+                            'target' => 'All Company',
+                            'published_by' => $request->user()->name,
+                            'read_count' => 0,
+                            'created_at' => $now,
+                            'updated_at' => $now,
+                        ]);
+                    }
+                }
 
                 // Weekend Emergency Benefit Auto-Credit
                 $isWeekendEmergency = (bool) ($lockedAssignment->is_weekend_emergency ?? false);
@@ -758,11 +820,31 @@ class ProjectController extends Controller
             $developerUserId = DB::table('users')->where('employee_id', $lockedAssignment->employee_id)->value('id');
             if ($developerUserId) {
                 $statusText = $decision === 'accept' ? 'accepted and marked completed' : 'returned for revisions';
+                $appreciationSummary = '';
+                $notifTitle = $decision === 'accept' ? 'Project Deliverable Accepted' : 'Project Returned for Revisions';
+
+                if ($decision === 'accept') {
+                    $parts = [];
+                    if (!empty($validated['appreciation_badge'])) {
+                        $parts[] = "Badge: {$validated['appreciation_badge']}";
+                    }
+                    if (!empty($validated['appreciation_rating'])) {
+                        $parts[] = "Rating: {$validated['appreciation_rating']}/5 Stars";
+                    }
+                    if (!empty($validated['appreciation_note'])) {
+                        $parts[] = "Appreciation: \"{$validated['appreciation_note']}\"";
+                    }
+                    if (!empty($parts)) {
+                        $notifTitle = '🌟 Project Accepted with Appreciation!';
+                        $appreciationSummary = ' ' . implode(' · ', $parts);
+                    }
+                }
+
                 DB::table('user_notifications')->insert([
                     'user_id' => $developerUserId,
                     'event_key' => 'project.completion_reviewed',
-                    'title' => $decision === 'accept' ? 'Project Deliverable Accepted' : 'Project Returned for Revisions',
-                    'message' => "Your project submission was {$statusText} by {$request->user()->name}." . (!empty($validated['remarks']) ? " Remarks: {$validated['remarks']}" : ''),
+                    'title' => $notifTitle,
+                    'message' => "Your project submission was {$statusText} by {$request->user()->name}." . (!empty($validated['remarks']) ? " Remarks: {$validated['remarks']}" : '') . $appreciationSummary,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);

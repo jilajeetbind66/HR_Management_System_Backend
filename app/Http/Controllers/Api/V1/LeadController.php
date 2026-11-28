@@ -248,14 +248,14 @@ class LeadController extends Controller
             }
 
             // Notify assigned employees
-            foreach (array_unique($validated['assigned_employee_ids']) as $empId) {
+            foreach ($assignedIds as $empId) {
                 $assignedUserId = DB::table('users')->where('employee_id', $empId)->value('id');
-                if ($assignedUserId && (int)$assignedUserId !== (int)$request->user()->id) {
+                if ($assignedUserId && (int) $assignedUserId !== (int) $request->user()->id) {
                     DB::table('user_notifications')->insert([
                         'user_id' => $assignedUserId,
                         'event_key' => 'lead.assigned',
                         'title' => "New Lead Assigned: {$validated['lead_name']}",
-                        'message' => "You have been assigned to lead '{$validated['lead_name']}' for client '{$validated['client_name']}'.",
+                        'message' => "You have been assigned to lead '{$validated['lead_name']}' (Status: {$validated['status']}).",
                         'created_at' => $now,
                         'updated_at' => $now,
                     ]);
